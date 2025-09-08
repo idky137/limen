@@ -1,0 +1,18 @@
+[package]
+name = "limen-processing"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Preprocessing and postprocessing components for Limen."
+
+[features]
+default = ["std"]
+std = []
+alloc = []
+fast-fourier-transform = []
+mel-frequency-cepstral-coefficients = []
+serde = ["dep:serde"]
+
+[dependencies]
+limen-core = { path = "../limen-core" }
+serde = { version = "1.0", features = ["derive"], optional = true }

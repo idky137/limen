@@ -1,0 +1,18 @@
+[package]
+name = "limen-output"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Output sinks for Limen."
+
+[features]
+default = ["std"]
+std = []
+alloc = []
+message-queuing-telemetry-transport = []
+general-purpose-input-output-raspberry-pi = []
+serde = ["dep:serde"]
+
+[dependencies]
+limen-core = { path = "../limen-core" }
+serde = { version = "1.0", features = ["derive"], optional = true }
