@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "limen"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "limen-core",
  "metrics",
@@ -717,14 +717,14 @@ dependencies = [
 
 [[package]]
 name = "limen-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "limen-devtools"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "limen-examples"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "limen",
  "limen-core",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "limen-light"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "heapless",
  "limen-core",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "limen-models"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "limen",
  "limen-core",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "limen-output"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "limen",
  "limen-core",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "limen-platform"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "limen",
  "limen-core",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "limen-processing"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "limen",
  "limen-core",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "limen-sensors"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "limen",
  "limen-core",

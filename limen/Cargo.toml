@@ -1,10 +1,11 @@
 [package]
 name = "limen"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
 description = "Dynamic runtime wiring for the Limen edge inference system (config, registries, builder, observability)."
-repository = "https://example.com/your/limen"
+authors = { workspace = true }
+repository = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+version = { workspace = true }
 
 [features]
 default = ["std"]

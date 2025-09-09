@@ -1,10 +1,11 @@
 [package]
 name = "limen-processing"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
 description = "Preprocessors and postprocessors for the Limen runtime."
-repository = "https://example.com/your/limen"
+authors = { workspace = true }
+repository = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+version = { workspace = true }
 
 [features]
 default = ["alloc"]

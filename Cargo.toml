@@ -1,15 +1,32 @@
+# Workspace Members are in dependency order.
 [workspace]
 members = [
-    "limen-core",
-    "limen",
-    "limen-processing",
-    "limen-sensors",
-    "limen-output",
-    "limen-models",
-    "limen-platform",
+    # Apps / top-level binaries & demos
     "limen-examples",
     "limen-devtools",
-    "limen-light",
+    # Component crates
+    "limen-sensors",
+    "limen-processing",
+    "limen-models",
+    "limen-output",
+    "limen-platform",
+    # Runtimes/orchestration
+    "limen",         # dynamic, config-driven runtime
+    "limen-light",   # strict no_alloc path
+    # Foundation
+    "limen-core",
 ]
 
+# Use the edition 2021 dependency resolver in the workspace, to match the crates
 resolver = "2"
+
+[workspace.package]
+authors = ["Idky137"]
+repository = "https://github.com/idky137/limen"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+version = "0.0.1"
+
+[profile.test]
+opt-level = 3
+debug = true
