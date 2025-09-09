@@ -4,15 +4,12 @@ use limen_core::traits::{ComputeBackend, ComputeBackendFactory, Model};
 use limen_core::types::{DataType, ModelMetadata, TensorInput, TensorOutput};
 
 #[cfg(feature = "alloc")]
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{boxed::Box, string::ToString, vec::Vec};
 
 use tract_onnx::prelude::*;
 
-type TractTypedPlan = typed::TypedRunnableModel<typed::Graph<TypedFact, Box<dyn TypedOp>>>;
+type TractTypedPlan =
+    typed::TypedRunnableModel<tract_onnx::prelude::Graph<TypedFact, Box<dyn TypedOp>>>;
 
 pub struct TractOnnxModel {
     runnable: TractTypedPlan,

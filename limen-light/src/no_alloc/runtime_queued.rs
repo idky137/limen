@@ -173,16 +173,19 @@ where
         policy: BackpressurePolicyNoAlloc,
         item: T,
     ) -> bool {
-        if queue.push_back(item).is_ok() {
-            return true;
-        }
-        match policy {
-            BackpressurePolicyNoAlloc::Block => false,
-            BackpressurePolicyNoAlloc::DropNewest => false,
-            BackpressurePolicyNoAlloc::DropOldest => {
-                let _ = queue.pop_front();
-                queue.push_back(item).is_ok()
-            }
+        match queue.push_back(item) {
+            Ok(()) => true,
+            Err(item) => match policy {
+                BackpressurePolicyNoAlloc::Block => false,
+                BackpressurePolicyNoAlloc::DropNewest => {
+                    let _ = item;
+                    false
+                }
+                BackpressurePolicyNoAlloc::DropOldest => {
+                    let _ = queue.pop_front();
+                    queue.push_back(item).is_ok()
+                }
+            },
         }
     }
 

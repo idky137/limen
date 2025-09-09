@@ -19,12 +19,19 @@ impl OutputSink for GeneralPurposeInputOutputSink {
             } else {
                 self.pin.set_low();
             }
+        } else if is_active {
+            self.pin.set_low();
         } else {
-            if is_active {
-                self.pin.set_low();
-            } else {
-                self.pin.set_high();
-            }
+            self.pin.set_high();
+        }
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), OutputError> {
+        if self.active_high {
+            self.pin.set_low();
+        } else {
+            self.pin.set_high();
         }
         Ok(())
     }
@@ -35,6 +42,7 @@ impl OutputSinkFactory for GeneralPurposeInputOutputSinkFactory {
     fn sink_name(&self) -> &'static str {
         "gpio"
     }
+
     fn create_output_sink(
         &self,
         configuration: &OutputSinkConfiguration,
@@ -56,7 +64,7 @@ impl OutputSinkFactory for GeneralPurposeInputOutputSinkFactory {
             message: "failed to access GPIO".to_string(),
         })?;
         let pin = gpio
-            .get(pin_number as u8)
+            .get(pin_number)
             .map_err(|_| OutputError::Other {
                 message: "invalid GPIO pin".to_string(),
             })?
