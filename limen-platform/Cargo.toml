@@ -18,5 +18,6 @@ num_cpus = ["dep:num_cpus"]
 [dependencies]
 limen-core = { path = "../limen-core", default-features = false }
 limen = { path = "../limen", default-features = false, optional = true }
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-num_cpus = { version = "1.16", optional = true }
+
+serde = { workspace = true, optional = true, features = ["derive"] }
+num_cpus = { workspace = true, optional = true }

@@ -15,7 +15,6 @@ use_tract = []
 [dependencies]
 limen-core = { path = "../limen-core", default-features = false, features = ["std"] }
 limen = { path = "../limen", default-features = false, features = ["std", "serde", "toml", "tracing"] }
-
 limen-processing = { path = "../limen-processing", default-features = false, features = ["std", "register"] }
 limen-sensors = { path = "../limen-sensors", default-features = false, features = ["std", "register"] }
 limen-output = { path = "../limen-output", default-features = false, features = ["std", "register", "stdout"] }

@@ -19,15 +19,15 @@ with-models = ["dep:limen-models"]
 with-tract = []
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"], optional = true }
-toml = { version = "0.8", optional = true }
-
-limen = { path = "../limen", default-features = false, optional = true, features = ["std", "serde", "toml", "tracing"] }
 limen-core = { path = "../limen-core", default-features = false, optional = true, features = ["std", "serde"] }
+limen = { path = "../limen", default-features = false, optional = true, features = ["std", "serde", "toml", "tracing"] }
 limen-processing = { path = "../limen-processing", default-features = false, optional = true, features = ["std", "register"] }
 limen-sensors = { path = "../limen-sensors", default-features = false, optional = true, features = ["std", "register"] }
 limen-output = { path = "../limen-output", default-features = false, optional = true, features = ["std", "register", "stdout", "file"] }
 limen-platform = { path = "../limen-platform", default-features = false, optional = true, features = ["std", "register"] }
 limen-models = { path = "../limen-models", default-features = false, optional = true, features = ["std", "register", "native-identity"] }
+
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, optional = true, features = ["derive"] }
+toml = { workspace = true, optional = true }

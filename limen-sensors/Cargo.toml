@@ -21,6 +21,6 @@ serde = ["limen-core/serde", "dep:serde"]
 limen-core = { path = "../limen-core", default-features = false }
 limen = { path = "../limen", default-features = false, optional = true }
 
-serialport = { version = "4.2", optional = true }
-paho-mqtt = { version = "0.12", optional = true, default-features = true, features = ["bundled"] }
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serialport = { workspace = true, optional = true }
+paho-mqtt = { workspace = true, optional = true, features = ["bundled"] }
+serde = { workspace = true, optional = true, features = ["derive"] }

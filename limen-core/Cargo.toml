@@ -14,4 +14,4 @@ std = ["alloc"]
 serde = ["dep:serde"]
 
 [dependencies]
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }

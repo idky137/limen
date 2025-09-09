@@ -21,6 +21,8 @@ serde = ["limen-core/serde", "dep:serde"]
 [dependencies]
 limen-core = { path = "../limen-core", default-features = false }
 limen = { path = "../limen", default-features = false, optional = true }
-paho-mqtt = { version = "0.12", optional = true, default-features = true, features = ["bundled"] }
-rppal = { version = "0.22", optional = true }
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+
+paho-mqtt = { workspace = true, optional = true, features = ["bundled"] }
+rppal = { workspace = true, optional = true }
+
+serde = { workspace = true, optional = true, features = ["derive"] }

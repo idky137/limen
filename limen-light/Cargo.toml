@@ -16,5 +16,6 @@ no_alloc = ["dep:heapless"]
 
 [dependencies]
 limen-core = { path = "../limen-core", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-heapless = { version = "0.8", default-features = false, optional = true }
+
+serde = { workspace = true, optional = true, features = ["derive"] }
+heapless = { workspace = true, optional = true }
