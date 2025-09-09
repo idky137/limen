@@ -13,3 +13,8 @@ Crates:
 - `limen-examples` – runnable examples.
 - `limen-devtools` – CLI tools (validate-config, generate-sim, inspect-model).
 - `limen-light` – minimal, embedded-friendly wrapper; and a no-alloc path with optional heapless queues.
+
+Designed to be run in 3 configurations:
+- no_std + no_alloc (embedded firmware),
+- no_std + alloc (embedded Linux, WASM),
+- std + alloc (desktop/server).
