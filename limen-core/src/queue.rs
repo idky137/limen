@@ -7,6 +7,19 @@ use crate::errors::QueueError;
 use crate::message::{Message, Payload};
 use crate::policy::{AdmissionDecision, EdgePolicy, WatermarkState};
 
+pub mod spsc_array;
+
+#[cfg(feature = "alloc")]
+pub mod spsc_vecdeque;
+
+#[cfg(feature = "std")]
+pub mod spsc_ringbuf;
+
+#[cfg(feature = "spsc_raw")]
+pub mod spsc_raw;
+
+pub mod spsc_priority2;
+
 /// Push result for enqueue attempts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnqueueResult {

@@ -11,8 +11,12 @@ keywords = ["edge-ai", "inference", "no_std", "runtime", "graph"]
 [features]
 default = []
 alloc = []
-std = ["alloc"]
+std = ["alloc", "ringbuf"]
+spsc_raw   = ["std"]                # enables SpscAtomicRing (unsafe)
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+ringbuf = { version = "0.4.8", optional = true }
