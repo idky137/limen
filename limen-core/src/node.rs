@@ -107,6 +107,7 @@ where
 /// - `InP`: input payload type; `OutP`: output payload type.
 pub trait Node<const IN: usize, const OUT: usize, InP, OutP>
 where
+    // TODO: Should this be message<payload>?
     InP: Payload,
     OutP: Payload,
 {
