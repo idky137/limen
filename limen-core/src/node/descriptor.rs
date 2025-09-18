@@ -1,8 +1,11 @@
 //! Node descriptor types.
 
 use crate::{
-    message::payload::Payload,
-    node::{Node, NodeKind, NodePolicy},
+    errors::NodeError,
+    memory::PlacementAcceptance,
+    message::{payload::Payload, Message},
+    node::{Node, NodeCapabilities, NodeKind, NodePolicy, StepContext, StepResult},
+    queue::SpscQueue,
     types::{NodeIndex, PortId, PortIndex},
 };
 
@@ -46,7 +49,7 @@ pub struct NodeDescriptor {
 /// Callers should ensure `in_ports == IN as u16` and `out_ports == OUT as u16` so the
 /// stored counts are consistent with the node’s const-generic port arity.
 #[derive(Debug, Clone)]
-pub struct NodeLink<'a, N, const IN: usize, const OUT: usize, InP, OutP>
+pub struct NodeLink<N, const IN: usize, const OUT: usize, InP, OutP>
 where
     InP: Payload,
     OutP: Payload,
@@ -56,7 +59,7 @@ where
     ///
     /// The descriptor does not own the node; the `'a` lifetime ties this reference
     /// to the node’s lifetime.
-    node: &'a N,
+    node: N,
 
     /// Unique identifier of this node within the graph.
     id: NodeIndex,
@@ -70,7 +73,7 @@ where
     _payload_marker: core::marker::PhantomData<(InP, OutP)>,
 }
 
-impl<'a, N, const IN: usize, const OUT: usize, InP, OutP> NodeLink<'a, N, IN, OUT, InP, OutP>
+impl<N, const IN: usize, const OUT: usize, InP, OutP> NodeLink<N, IN, OUT, InP, OutP>
 where
     InP: Payload,
     OutP: Payload,
@@ -82,7 +85,7 @@ where
     /// - `node`: Borrowed reference to the concrete node instance.
     /// - `id`: Unique identifier of the node in the graph.
     /// - `name`: Optional static name for diagnostics or tooling.
-    pub fn new(node: &'a N, id: NodeIndex, name: Option<&'static str>) -> Self {
+    pub fn new(node: N, id: NodeIndex, name: Option<&'static str>) -> Self {
         Self {
             node,
             id,
@@ -91,10 +94,16 @@ where
         }
     }
 
-    /// Get a reference to the borrowed node.
+    /// Get a reference to the inner node.
     #[inline]
-    pub fn node(&self) -> &'a N {
-        self.node
+    pub fn node(&self) -> &N {
+        &self.node
+    }
+
+    /// Get a mutable reference to the inner node.
+    #[inline]
+    pub fn node_mut(&mut self) -> &mut N {
+        &mut self.node
     }
 
     /// Get the unique identifier of this node.
@@ -142,5 +151,74 @@ where
             out_ports: OUT as u16,
             name: self.name(),
         }
+    }
+}
+
+impl<N, const IN: usize, const OUT: usize, InP, OutP> Node<IN, OUT, InP, OutP>
+    for NodeLink<N, IN, OUT, InP, OutP>
+where
+    InP: Payload,
+    OutP: Payload,
+    N: Node<IN, OUT, InP, OutP>,
+{
+    #[inline]
+    fn describe_capabilities(&self) -> NodeCapabilities {
+        self.node.describe_capabilities()
+    }
+
+    #[inline]
+    fn input_acceptance(&self) -> [PlacementAcceptance; IN] {
+        self.node.input_acceptance()
+    }
+
+    #[inline]
+    fn output_acceptance(&self) -> [PlacementAcceptance; OUT] {
+        self.node.output_acceptance()
+    }
+
+    #[inline]
+    fn policy(&self) -> NodePolicy {
+        self.node.policy()
+    }
+
+    #[inline]
+    fn node_kind(&self) -> NodeKind {
+        self.node.node_kind()
+    }
+
+    #[inline]
+    fn initialize<C, T>(&mut self, clock: &C, telemetry: &mut T) -> Result<(), NodeError> {
+        self.node.initialize(clock, telemetry)
+    }
+
+    #[inline]
+    fn start<C, T>(&mut self, clock: &C, telemetry: &mut T) -> Result<(), NodeError> {
+        self.node.start(clock, telemetry)
+    }
+
+    #[inline]
+    fn step<InQ, OutQ, C, T>(
+        &mut self,
+        ctx: &mut StepContext<IN, OUT, InP, OutP, InQ, OutQ, C, T>,
+    ) -> Result<StepResult, NodeError>
+    where
+        InQ: SpscQueue<Item = Message<InP>>,
+        OutQ: SpscQueue<Item = Message<OutP>>,
+    {
+        self.node.step(ctx)
+    }
+
+    #[inline]
+    fn on_watchdog_timeout<C, T>(
+        &mut self,
+        clock: &C,
+        telemetry: &mut T,
+    ) -> Result<StepResult, NodeError> {
+        self.node.on_watchdog_timeout(clock, telemetry)
+    }
+
+    #[inline]
+    fn stop<C, T>(&mut self, clock: &C, telemetry: &mut T) -> Result<(), NodeError> {
+        self.node.stop(clock, telemetry)
     }
 }

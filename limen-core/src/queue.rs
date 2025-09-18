@@ -99,3 +99,50 @@ pub fn enqueue_with_admission<P: Payload, Q: SpscQueue<Item = Message<P>>>(
         AdmissionDecision::Reject => EnqueueResult::Rejected,
     }
 }
+
+/// A no-op queue implementation used for phantom inputs and outputs.
+///
+/// `NoQueue` acts as a placeholder in the graph where a queue is required by
+/// type but no actual buffering or message transfer is desired. All enqueue
+/// attempts are rejected, and all dequeue or peek attempts return empty.
+///
+/// This is primarily useful for:
+/// - Phantom or unconnected ports in a graph.
+/// - Simplifying generic code that expects a queue type, without allocating
+///   unnecessary resources.
+/// - Static analysis or testing scenarios where message flow is disabled.
+///
+/// # Type Parameters
+/// - `P`: Payload type of the [`Message`] carried by this queue.
+///
+/// # Behavior
+/// - [`SpscQueue::try_push`] always returns [`EnqueueResult::Rejected`].
+/// - [`SpscQueue::try_pop`] always returns [`QueueError::Empty`].
+/// - [`SpscQueue::try_peek`] always returns [`QueueError::Empty`].
+/// - [`SpscQueue::occupancy`] always reports zero items, zero bytes, and
+///   [`WatermarkState::AtOrAboveHard`] (fully saturated, disallowing admission).
+pub struct NoQueue<P: Payload>(core::marker::PhantomData<P>);
+
+impl<P: Payload + Clone> SpscQueue for NoQueue<P> {
+    type Item = Message<P>;
+    #[inline]
+    fn try_push(&mut self, _item: Self::Item, _policy: &EdgePolicy) -> EnqueueResult {
+        EnqueueResult::Rejected
+    }
+    #[inline]
+    fn try_pop(&mut self) -> Result<Self::Item, QueueError> {
+        Err(QueueError::Empty)
+    }
+    #[inline]
+    fn occupancy(&self, _policy: &EdgePolicy) -> QueueOccupancy {
+        QueueOccupancy {
+            items: 0,
+            bytes: 0,
+            watermark: WatermarkState::AtOrAboveHard,
+        }
+    }
+    #[inline]
+    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+        Err(QueueError::Empty)
+    }
+}

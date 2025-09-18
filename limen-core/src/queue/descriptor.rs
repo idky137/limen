@@ -1,9 +1,10 @@
 //! Edge descriptor types.
 
 use crate::{
+    errors::QueueError,
     message::{payload::Payload, Message},
     policy::EdgePolicy,
-    queue::SpscQueue,
+    queue::{EnqueueResult, QueueOccupancy, SpscQueue},
     types::{EdgeIndex, PortId},
 };
 
@@ -31,15 +32,13 @@ pub struct EdgeDescriptor {
 /// - `Q`: concrete queue type implementing `SpscQueue<Item = Message<P>>`
 /// - `P`: message payload type
 #[derive(Debug)]
-pub struct EdgeLink<'a, Q, P>
+pub struct EdgeLink<Q, P>
 where
     P: Payload,
     Q: SpscQueue<Item = Message<P>>,
 {
     /// Borrowed handle to the concrete queue instance for this edge.
-    //
-    // TODO: Remove ref?
-    queue: &'a mut Q,
+    queue: Q,
 
     /// Unique identifier of this edge in the graph.
     pub id: EdgeIndex,
@@ -60,7 +59,7 @@ where
     _payload_marker: core::marker::PhantomData<P>,
 }
 
-impl<'a, Q, P> EdgeLink<'a, Q, P>
+impl<Q, P> EdgeLink<Q, P>
 where
     P: Payload,
     Q: SpscQueue<Item = Message<P>>,
@@ -68,7 +67,7 @@ where
     /// Construct a new `EdgeLink` that borrows the given queue and records its metadata.
     #[inline]
     pub fn new(
-        queue: &'a mut Q,
+        queue: Q,
         id: EdgeIndex,
         upstream_port: PortId,
         downstream_port: PortId,
@@ -86,10 +85,16 @@ where
         }
     }
 
-    /// Get a mutable reference to the underlying queue.
+    /// Get a reference to the inner queue.
     #[inline]
-    pub fn queue(&mut self) -> &mut Q {
-        self.queue
+    pub fn queue(&self) -> &Q {
+        &self.queue
+    }
+
+    /// Get a mutable reference to the inner queue
+    #[inline]
+    pub fn queue_mut(&mut self) -> &mut Q {
+        &mut self.queue
     }
 
     /// Get the unique identifier of this edge.
@@ -131,5 +136,33 @@ where
             downstream: self.downstream_port(),
             name: self.name(),
         }
+    }
+}
+
+impl<Q, P> SpscQueue for EdgeLink<Q, P>
+where
+    P: Payload + Clone,
+    Q: SpscQueue<Item = Message<P>>,
+{
+    type Item = Message<P>;
+
+    #[inline]
+    fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
+        self.queue.try_push(item, policy)
+    }
+
+    #[inline]
+    fn try_pop(&mut self) -> Result<Self::Item, QueueError> {
+        self.queue.try_pop()
+    }
+
+    #[inline]
+    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+        self.queue.occupancy(policy)
+    }
+
+    #[inline]
+    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+        self.queue.try_peek()
     }
 }
