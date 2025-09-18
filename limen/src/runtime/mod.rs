@@ -5,5 +5,5 @@
 //! stepping; this isolates threading concerns in the graph without adding
 //! dynamic dispatch or unsafe in the core runtime.
 
-pub mod p2_single;
 pub mod p2_concurrent;
+pub mod p2_single;

@@ -2,10 +2,10 @@
 use std::time::Instant;
 
 use limen_core::errors::NodeError;
+use limen_core::node::StepResult;
 use limen_core::platform::PlatformClock;
 use limen_core::scheduling::{DequeuePolicy, NodeSummary};
 use limen_core::telemetry::Telemetry;
-use limen_core::node::StepResult;
 
 /// Graph trait for P2 single-thread runtime.
 pub trait GraphP2<C: PlatformClock, T: Telemetry> {
@@ -16,16 +16,25 @@ pub trait GraphP2<C: PlatformClock, T: Telemetry> {
     fn initialize(&mut self, clock: &C, telemetry: &mut T) -> Result<(), NodeError>;
 
     /// Optional warm-up.
-    fn start(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> { Ok(()) }
+    fn start(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> {
+        Ok(())
+    }
 
     /// Return scheduler summaries for all nodes.
     fn summaries(&self) -> [NodeSummary; Self::NODES];
 
     /// Step a node by index once.
-    fn step_node(&mut self, index: usize, clock: &C, telemetry: &mut T) -> Result<StepResult, NodeError>;
+    fn step_node(
+        &mut self,
+        index: usize,
+        clock: &C,
+        telemetry: &mut T,
+    ) -> Result<StepResult, NodeError>;
 
     /// Optional stop.
-    fn stop(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> { Ok(()) }
+    fn stop(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> {
+        Ok(())
+    }
 }
 
 /// Runtime parameterized by a dequeue policy.
@@ -51,7 +60,12 @@ where
 {
     /// Build a new runtime.
     pub fn new(graph: G, clock: C, telemetry: T, policy: P) -> Self {
-        Self { graph, clock, telemetry, policy }
+        Self {
+            graph,
+            clock,
+            telemetry,
+            policy,
+        }
     }
 
     /// Initialize and start the graph.
@@ -66,7 +80,9 @@ where
         let summaries = self.graph.summaries();
         if let Some(next) = self.policy.select_next(&summaries) {
             let idx = next.0;
-            let _res = self.graph.step_node(idx, &self.clock, &mut self.telemetry)?;
+            let _res = self
+                .graph
+                .step_node(idx, &self.clock, &mut self.telemetry)?;
             Ok(Some(idx))
         } else {
             Ok(None)
@@ -87,9 +103,15 @@ where
     }
 
     /// Borrow the graph.
-    pub fn graph(&self) -> &G { &self.graph }
+    pub fn graph(&self) -> &G {
+        &self.graph
+    }
     /// Borrow the telemetry sink.
-    pub fn telemetry(&self) -> &T { &self.telemetry }
+    pub fn telemetry(&self) -> &T {
+        &self.telemetry
+    }
     /// Borrow the clock.
-    pub fn clock(&self) -> &C { &self.clock }
+    pub fn clock(&self) -> &C {
+        &self.clock
+    }
 }

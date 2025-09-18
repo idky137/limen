@@ -5,6 +5,6 @@
 //! - [`stdout::StdoutSink`]: prints payloads with a configurable prefix.
 //! - [`file::FileSink`]: appends payloads to a file (std).
 
-pub mod stdout;
 #[cfg(feature = "std")]
 pub mod file;
+pub mod stdout;

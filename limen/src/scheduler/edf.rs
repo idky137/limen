@@ -30,11 +30,12 @@ impl DequeuePolicy for EdfPolicy {
             }
         }
         self.rr = self.rr.wrapping_add(1);
-        best.map(|(i, _, _)| candidates[i].index)
-            .or_else(|| {
-                // Fallback: any Ready candidate
-                candidates.iter().position(|c| c.readiness == Readiness::Ready)
-                    .map(|i| candidates[i].index)
-            })
+        best.map(|(i, _, _)| candidates[i].index).or_else(|| {
+            // Fallback: any Ready candidate
+            candidates
+                .iter()
+                .position(|c| c.readiness == Readiness::Ready)
+                .map(|i| candidates[i].index)
+        })
     }
 }

@@ -5,14 +5,14 @@
 //! interior mutability (e.g., `Mutex`/`RwLock`) and expose a **thread-safe** stepping
 //! API. This trait models that requirement without imposing it universally.
 
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 
 use limen_core::errors::NodeError;
+use limen_core::node::StepResult;
 use limen_core::platform::PlatformClock;
 use limen_core::scheduling::{DequeuePolicy, NodeSummary};
 use limen_core::telemetry::Telemetry;
-use limen_core::node::StepResult;
 
 /// Thread-safe graph trait for concurrent stepping.
 pub trait GraphP2Concurrent<C: PlatformClock, T: Telemetry>: Send + 'static {
@@ -26,7 +26,12 @@ pub trait GraphP2Concurrent<C: PlatformClock, T: Telemetry>: Send + 'static {
     fn summaries(&self) -> [NodeSummary; Self::NODES];
 
     /// Step a node by index **without** exclusive &mut access (uses interior mutability).
-    fn step_node_threadsafe(&self, index: usize, clock: &C, telemetry: &T) -> Result<StepResult, NodeError>;
+    fn step_node_threadsafe(
+        &self,
+        index: usize,
+        clock: &C,
+        telemetry: &T,
+    ) -> Result<StepResult, NodeError>;
 
     /// Stop the graph.
     fn stop(&self, clock: &C, telemetry: &T) -> Result<(), NodeError>;
@@ -73,12 +78,20 @@ where
             }));
         }
 
-        Self { graph, clock, telemetry, policy, tx, _handles: handles }
+        Self {
+            graph,
+            clock,
+            telemetry,
+            policy,
+            tx,
+            _handles: handles,
+        }
     }
 
     /// Initialize and start the graph.
     pub fn initialize_and_start(&self) -> Result<(), NodeError> {
-        self.graph.initialize_and_start(&self.clock, &self.telemetry)
+        self.graph
+            .initialize_and_start(&self.clock, &self.telemetry)
     }
 
     /// Run one scheduler tick: select a node and dispatch to a worker.

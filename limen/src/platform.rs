@@ -1,7 +1,7 @@
 //! Std-based platform adapters for P2 (clock, timers, affinity stubs).
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
-use limen_core::platform::{PlatformClock, Timers, Affinity};
+use limen_core::platform::{Affinity, PlatformClock, Timers};
 use limen_core::types::Ticks;
 
 /// A std-based clock using `Instant` as the monotonic source.
@@ -14,7 +14,10 @@ pub struct StdClock {
 impl StdClock {
     /// Create a new clock epoch.
     pub fn new() -> Self {
-        Self { zero: Instant::now(), ticks_per_ns: 1.0 }
+        Self {
+            zero: Instant::now(),
+            ticks_per_ns: 1.0,
+        }
     }
 }
 

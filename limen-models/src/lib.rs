@@ -10,4 +10,4 @@ pub mod identity;
 pub mod nodes;
 
 pub use limen_core as core;
-pub use limen_core::compute as compute;
+pub use limen_core::compute;

@@ -1,19 +1,19 @@
 //! P2 example: Simulated source → Normalize → Identity model → Threshold → Stdout sink.
+use limen::platform::StdClock;
+use limen::runtime::p2_single::{GraphP2, RuntimeP2};
+use limen::scheduler::edf::EdfPolicy;
+use limen::spsc::lockfree_ring::LockFreeRing;
 use limen_core::message::Message;
-use limen_core::policy::{EdgePolicy, QueueCaps, AdmissionPolicy, OverBudgetAction};
 use limen_core::node::NodePolicy;
-use limen_processing::payload::{Tensor1D, Label};
-use limen_processing::math::NormalizeNode;
-use limen_processing::logic::{ThresholdNode, DebounceNode};
-use limen_processing::identity::IdentityNode;
+use limen_core::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps};
 use limen_models::identity::{IdentityBackend, IdentityModel};
 use limen_models::nodes::ModelNode;
-use limen_sensors::simulated::SimulatedSource1D;
 use limen_output::stdout::StdoutSink;
-use limen::spsc::lockfree_ring::LockFreeRing;
-use limen::scheduler::edf::EdfPolicy;
-use limen::runtime::p2_single::{RuntimeP2, GraphP2};
-use limen::platform::StdClock;
+use limen_processing::identity::IdentityNode;
+use limen_processing::logic::{DebounceNode, ThresholdNode};
+use limen_processing::math::NormalizeNode;
+use limen_processing::payload::{Label, Tensor1D};
+use limen_sensors::simulated::SimulatedSource1D;
 
 // Assemble a typed 5-stage chain using the P2 helper
 use limen::graph::simple_chain::{SimpleChain5, SimpleChain5P2};
@@ -37,11 +37,17 @@ fn main() {
     // Nodes
     let source = SimulatedSource1D::<N>::new();
     let pre = NormalizeNode::<N>::new(1.0, 0.0);
-    let model = ModelNode::new(IdentityModel, NodePolicy {
-        batching: limen_core::policy::BatchingPolicy::none(),
-        budget: limen_core::policy::BudgetPolicy { tick_budget: None },
-        deadline: limen_core::policy::DeadlinePolicy { require_absolute_deadline: false, slack_tolerance_ns: None },
-    });
+    let model = ModelNode::new(
+        IdentityModel,
+        NodePolicy {
+            batching: limen_core::policy::BatchingPolicy::none(),
+            budget: limen_core::policy::BudgetPolicy { tick_budget: None },
+            deadline: limen_core::policy::DeadlinePolicy {
+                require_absolute_deadline: false,
+                slack_tolerance_ns: None,
+            },
+        },
+    );
     let post = IdentityNode;
     let sink = StdoutSink;
 
@@ -53,13 +59,32 @@ fn main() {
     let q4 = Q4::with_capacity(qcap);
 
     // Edge policies (simple same policy for all)
-    let caps = QueueCaps { max_items: qcap - 1, soft_items: (qcap / 2), max_bytes: None, soft_bytes: None };
-    let ep = EdgePolicy { caps, admission: AdmissionPolicy::DeadlineAndQoSAware, over_budget: OverBudgetAction::Drop };
+    let caps = QueueCaps {
+        max_items: qcap - 1,
+        soft_items: (qcap / 2),
+        max_bytes: None,
+        soft_bytes: None,
+    };
+    let ep = EdgePolicy {
+        caps,
+        admission: AdmissionPolicy::DeadlineAndQoSAware,
+        over_budget: OverBudgetAction::Drop,
+    };
 
     let mut chain = SimpleChain5 {
-        source, pre, model, post, sink,
-        q1, q2, q3, q4,
-        pol_q1: ep, pol_q2: ep, pol_q3: ep, pol_q4: ep,
+        source,
+        pre,
+        model,
+        post,
+        sink,
+        q1,
+        q2,
+        q3,
+        q4,
+        pol_q1: ep,
+        pol_q2: ep,
+        pol_q3: ep,
+        pol_q4: ep,
     };
 
     let mut graph = SimpleChain5P2(chain);

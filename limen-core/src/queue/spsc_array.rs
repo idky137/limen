@@ -53,7 +53,7 @@ impl<T, const N: usize> StaticRing<T, N> {
     }
 }
 
-impl<P: Payload + std::clone::Clone, const N: usize> SpscQueue for StaticRing<Message<P>, N> {
+impl<P: Payload + Clone, const N: usize> SpscQueue for StaticRing<Message<P>, N> {
     type Item = Message<P>;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {

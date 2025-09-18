@@ -1,10 +1,10 @@
 //! Model node wrapper: converts any `ComputeModel` into a `Node`.
-use limen_core::message::{Message, Payload};
-use limen_core::node::{Node, NodeCapabilities, NodePolicy, StepContext, StepResult};
-use limen_core::queue::{SpscQueue, enqueue_with_admission};
+use limen_core::compute::{ComputeModel, ModelMetadata};
 use limen_core::errors::NodeError;
 use limen_core::memory::PlacementAcceptance;
-use limen_core::compute::{ComputeModel, ModelMetadata};
+use limen_core::message::{Message, Payload};
+use limen_core::node::{Node, NodeCapabilities, NodePolicy, StepContext, StepResult};
+use limen_core::queue::{enqueue_with_admission, SpscQueue};
 
 /// A node that executes a compute model synchronously.
 #[derive(Debug)]
@@ -27,7 +27,10 @@ where
     fn describe_capabilities(&self) -> NodeCapabilities {
         let meta: ModelMetadata = self.model.metadata();
         let _ = meta; // mapping to NodeCapabilities keeps flat for now
-        NodeCapabilities { device_streams: false, degrade_tiers: false }
+        NodeCapabilities {
+            device_streams: false,
+            degrade_tiers: false,
+        }
     }
 
     fn input_acceptance(&self) -> [PlacementAcceptance; 1] {
@@ -42,7 +45,9 @@ where
         self.policy
     }
 
-    fn initialize<C, T>(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> { Ok(()) }
+    fn initialize<C, T>(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> {
+        Ok(())
+    }
 
     fn step<InQ, OutQ, C, T>(
         &mut self,
@@ -68,7 +73,9 @@ where
         let mut out_payload: OutP = crate::default_out::<OutP>();
 
         // Execute compute
-        self.model.run(&m.payload, &mut out_payload).map_err(|_e| NodeError::new(limen_core::errors::NodeErrorKind::ExecutionFailed, 0))?;
+        self.model
+            .run(&m.payload, &mut out_payload)
+            .map_err(|_e| NodeError::new(limen_core::errors::NodeErrorKind::ExecutionFailed, 0))?;
 
         let header = m.header;
         let out_msg = Message::new(header, out_payload);

@@ -1,8 +1,8 @@
 //! P1 runtime: cooperative micro-batching with bounded heap.
 //!
 //! This runtime targets `no_std + alloc` devices (RTOS/embedded Linux/WASM).
-use limen_core::node::{NodePolicy, StepResult};
 use limen_core::errors::NodeError;
+use limen_core::node::{NodePolicy, StepResult};
 use limen_core::platform::PlatformClock;
 use limen_core::telemetry::Telemetry;
 use limen_core::types::Ticks;
@@ -16,16 +16,25 @@ pub trait GraphP1<C: PlatformClock, T: Telemetry> {
     fn initialize(&mut self, clock: &C, telemetry: &mut T) -> Result<(), NodeError>;
 
     /// Optional warm-up.
-    fn start(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> { Ok(()) }
+    fn start(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> {
+        Ok(())
+    }
 
     /// Return the policy bundle of a node.
     fn node_policy(&self, index: usize) -> NodePolicy;
 
     /// Step the node once.
-    fn step_node(&mut self, index: usize, clock: &C, telemetry: &mut T) -> Result<StepResult, NodeError>;
+    fn step_node(
+        &mut self,
+        index: usize,
+        clock: &C,
+        telemetry: &mut T,
+    ) -> Result<StepResult, NodeError>;
 
     /// Optional stop.
-    fn stop(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> { Ok(()) }
+    fn stop(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> {
+        Ok(())
+    }
 }
 
 /// Runtime with micro-batching (N and/or Δt cap).
@@ -49,7 +58,12 @@ where
 {
     /// Create a new runtime.
     pub fn new(graph: G, clock: C, telemetry: T) -> Self {
-        Self { graph, clock, telemetry, next: 0 }
+        Self {
+            graph,
+            clock,
+            telemetry,
+            next: 0,
+        }
     }
 
     /// Initialize and start.
@@ -78,14 +92,19 @@ where
         let mut last_res = StepResult::NoInput;
 
         loop {
-            let res = self.graph.step_node(idx, &self.clock, &mut self.telemetry)?;
+            let res = self
+                .graph
+                .step_node(idx, &self.clock, &mut self.telemetry)?;
             last_res = res;
 
             match res {
                 StepResult::MadeProgress => {
                     steps_done += 1;
                 }
-                StepResult::NoInput | StepResult::Backpressured | StepResult::WaitingOnExternal | StepResult::Terminal => {
+                StepResult::NoInput
+                | StepResult::Backpressured
+                | StepResult::WaitingOnExternal
+                | StepResult::Terminal => {
                     break;
                 }
                 StepResult::YieldUntil(ticks) => {
@@ -133,9 +152,15 @@ where
     }
 
     /// Borrow the inner graph.
-    pub fn graph(&self) -> &G { &self.graph }
+    pub fn graph(&self) -> &G {
+        &self.graph
+    }
     /// Borrow the inner telemetry sink.
-    pub fn telemetry(&self) -> &T { &self.telemetry }
+    pub fn telemetry(&self) -> &T {
+        &self.telemetry
+    }
     /// Borrow the platform clock.
-    pub fn clock(&self) -> &C { &self.clock }
+    pub fn clock(&self) -> &C {
+        &self.clock
+    }
 }

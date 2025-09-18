@@ -2,8 +2,8 @@
 //!
 //! Concrete schedulers live in `limen-light` (P0/P1) and `limen` (P2).
 
-use crate::types::{DeadlineNs, NodeIndex};
 use crate::policy::WatermarkState;
+use crate::types::{DeadlineNs, NodeIndex};
 
 /// Readiness level derived from inputs and backpressure state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -42,7 +42,7 @@ impl<QHi, QLo, P> SpscQueue for Priority2<QHi, QLo, P>
 where
     QHi: SpscQueue<Item = Message<P>>,
     QLo: SpscQueue<Item = Message<P>>,
-    P: Payload + std::clone::Clone,
+    P: Payload + Clone,
 {
     type Item = Message<P>;
 

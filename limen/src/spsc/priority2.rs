@@ -4,10 +4,10 @@
 //! and routes `try_push` by inspecting the message header's QoS class. `try_pop`
 //! always prefers the high-priority lane when available.
 
-use limen_core::queue::{SpscQueue, EnqueueResult, QueueOccupancy};
-use limen_core::policy::{EdgePolicy};
 use limen_core::errors::QueueError;
 use limen_core::message::{Message, Payload};
+use limen_core::policy::EdgePolicy;
+use limen_core::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 use limen_core::types::QoSClass;
 
 /// Two-lane priority queue.
@@ -30,7 +30,11 @@ where
 {
     /// Build a two-lane priority queue from hi/lo queues.
     pub fn new(hi: QHi, lo: QLo) -> Self {
-        Self { hi, lo, _p: core::marker::PhantomData }
+        Self {
+            hi,
+            lo,
+            _p: core::marker::PhantomData,
+        }
     }
 }
 
@@ -63,7 +67,11 @@ where
         let items = hi.items + lo.items;
         let bytes = hi.bytes + lo.bytes;
         let watermark = policy.watermark(items, bytes);
-        QueueOccupancy { items, bytes, watermark }
+        QueueOccupancy {
+            items,
+            bytes,
+            watermark,
+        }
     }
 
     fn try_peek(&self) -> Result<&Self::Item, QueueError> {

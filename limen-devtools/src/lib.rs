@@ -19,7 +19,8 @@ pub struct SimpleChainConfig {
 
 /// Render a Rust module implementing a typed SimpleChain5 for the given config.
 pub fn render_simple_chain_module(cfg: &SimpleChainConfig) -> String {
-    format!(r#"
+    format!(
+        r#"
 pub mod generated {{
     use limen_processing::payload::Tensor1D;
     use limen_processing::math::{{NormalizeNode, MovingAverageNode}};
@@ -50,5 +51,8 @@ pub mod generated {{
         (default, default, default, default)
     }}
 }}
-"#, n = cfg.tensor_len, w = cfg.movavg_win)
+"#,
+        n = cfg.tensor_len,
+        w = cfg.movavg_win
+    )
 }

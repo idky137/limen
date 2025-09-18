@@ -3,9 +3,9 @@
 //! This backend simply copies inputs to outputs and advertises Host memory.
 
 use limen_core::compute::{BackendCapabilities, ComputeBackend, ComputeModel, ModelMetadata};
-use limen_core::message::Payload;
-use limen_core::memory::MemoryClass;
 use limen_core::errors::{InferenceError, InferenceErrorKind};
+use limen_core::memory::MemoryClass;
+use limen_core::message::Payload;
 
 /// Identity backend.
 #[derive(Debug, Clone, Copy, Default)]
@@ -13,7 +13,11 @@ pub struct IdentityBackend;
 
 impl ComputeBackend for IdentityBackend {
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities { device_streams: false, max_batch: Some(1), dtype_mask: 0 }
+        BackendCapabilities {
+            device_streams: false,
+            max_batch: Some(1),
+            dtype_mask: 0,
+        }
     }
 }
 
