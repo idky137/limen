@@ -2,7 +2,6 @@
 //! and a view/validation interface.
 
 use crate::errors::GraphError;
-use crate::memory::PlacementAcceptance;
 use crate::node::descriptor::NodeDescriptor;
 use crate::queue::descriptor::EdgeDescriptor;
 
@@ -11,7 +10,9 @@ use super::validate;
 /// A lightweight, borrow-based graph descriptor (works in `no_std` via static slices).
 #[derive(Debug, Clone, Copy)]
 pub struct GraphDesc<'a> {
+    /// Nodes descriptors.
     pub nodes: &'a [NodeDescriptor],
+    /// Edge descriptors.
     pub edges: &'a [EdgeDescriptor],
 }
 
@@ -35,6 +36,7 @@ impl<'a> GraphDesc<'a> {
 
 /// An interface for descriptor validation (borrowed/owned/buffer).
 pub trait GraphValidator {
+    /// Validates the wiring of the graph.
     fn validate(&self) -> Result<(), GraphError>;
 }
 
@@ -48,11 +50,14 @@ impl<'a> GraphValidator for GraphDesc<'a> {
 /// Owned, no-alloc descriptor (arrays are stored by value).
 #[derive(Debug, Clone)]
 pub struct GraphDescBuf<const N: usize, const E: usize> {
+    /// Nodes descriptors.
     pub nodes: [NodeDescriptor; N],
+    /// Edge descriptors.
     pub edges: [EdgeDescriptor; E],
 }
 
 impl<const N: usize, const E: usize> GraphDescBuf<N, E> {
+    /// Returns a `GraphDesc`.
     #[inline]
     pub fn as_borrowed(&self) -> GraphDesc<'_> {
         GraphDesc {
@@ -75,13 +80,19 @@ impl<const N: usize, const E: usize> GraphValidator for GraphDescBuf<N, E> {
 
 /// A read-only view over any graph descriptor storage.
 pub trait GraphDescriptorView {
+    /// Return a ref to the node descriptors.
     fn nodes(&self) -> &[NodeDescriptor];
+
+    /// Return a ref to the edge descriptors.
     fn edges(&self) -> &[EdgeDescriptor];
 
+    /// Return the number of nodes in the graph.
     #[inline]
     fn node_count(&self) -> usize {
         self.nodes().len()
     }
+
+    /// Return the number of edges in the graph.
     #[inline]
     fn edge_count(&self) -> usize {
         self.edges().len()
@@ -122,11 +133,14 @@ mod view_impl_owned {
     /// Owned descriptor produced by the builder (impl of the view).
     #[derive(Debug, Clone)]
     pub struct GraphDescOwned {
+        /// Nodes descriptors.
         pub nodes: Vec<NodeDescriptor>,
+        /// Edge descriptors.
         pub edges: Vec<EdgeDescriptor>,
     }
 
     impl GraphDescOwned {
+        /// Returns a `GraphDesc`.
         #[inline]
         pub fn as_borrowed(&self) -> GraphDesc<'_> {
             GraphDesc {

@@ -2,7 +2,7 @@
 //!
 //! Implementations are provided by `limen-platform` or the runtimes.
 
-use crate::types::{DeadlineNs, Ticks};
+use crate::types::Ticks;
 
 /// A monotonic platform clock.
 pub trait PlatformClock {

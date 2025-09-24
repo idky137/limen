@@ -105,6 +105,7 @@ pub trait GraphNodeContextBuilder<const I: usize, const IN: usize, const OUT: us
         clock: &C,
         telemetry: &mut T,
     ) -> StepContext<
+        '_,
         IN,
         OUT,
         <Self as GraphNodeTypes<I, IN, OUT>>::InP,
@@ -179,6 +180,7 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
         clock: &C,
         telemetry: &mut T,
     ) -> StepContext<
+        '_,
         IN,
         OUT,
         <Self as GraphNodeTypes<I, IN, OUT>>::InP,
