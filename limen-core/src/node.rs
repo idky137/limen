@@ -90,41 +90,52 @@ pub enum StepResult {
 /// The context is generic over input/output payload and queue types to avoid
 /// trait objects. Implementations in runtimes will construct instances of this
 /// context and pass them to nodes.
-pub struct StepContext<'a, const IN: usize, const OUT: usize, InP, OutP, InQ, OutQ, C, T>
-where
+pub struct StepContext<
+    'graph,
+    'telemetry,
+    'clock,
+    const IN: usize,
+    const OUT: usize,
+    InP,
+    OutP,
+    InQ,
+    OutQ,
+    C,
+    T,
+> where
     InP: Payload,
     OutP: Payload,
 {
     /// Arrays of inbound queues by input port index.
-    pub inputs: [&'a mut InQ; IN],
+    pub inputs: [&'graph mut InQ; IN],
     /// Arrays of outbound queues by output port index.
-    pub outputs: [&'a mut OutQ; OUT],
+    pub outputs: [&'graph mut OutQ; OUT],
     /// Edge policies for each input.
     pub in_policies: [EdgePolicy; IN],
     /// Edge policies for each output.
     pub out_policies: [EdgePolicy; OUT],
     /// Platform clock or timer services.
-    pub clock: &'a C,
+    pub clock: &'clock C,
     /// Telemetry sink for counters/histograms.
-    pub telemetry: &'a mut T,
+    pub telemetry: &'telemetry mut T,
     /// Phantom type markers to keep payload types visible to the compiler.
     _marker: core::marker::PhantomData<(InP, OutP)>,
 }
 
-impl<'a, const IN: usize, const OUT: usize, InP, OutP, InQ, OutQ, C, T>
-    StepContext<'a, IN, OUT, InP, OutP, InQ, OutQ, C, T>
+impl<'graph, 'telemetry, 'clock, const IN: usize, const OUT: usize, InP, OutP, InQ, OutQ, C, T>
+    StepContext<'graph, 'telemetry, 'clock, IN, OUT, InP, OutP, InQ, OutQ, C, T>
 where
     InP: Payload,
     OutP: Payload,
 {
     /// Create a new step context from queues, policies, and services.
     pub fn new(
-        inputs: [&'a mut InQ; IN],
-        outputs: [&'a mut OutQ; OUT],
+        inputs: [&'graph mut InQ; IN],
+        outputs: [&'graph mut OutQ; OUT],
         in_policies: [EdgePolicy; IN],
         out_policies: [EdgePolicy; OUT],
-        clock: &'a C,
-        telemetry: &'a mut T,
+        clock: &'clock C,
+        telemetry: &'telemetry mut T,
     ) -> Self {
         Self {
             inputs,
@@ -138,8 +149,8 @@ where
     }
 }
 
-impl<'a, const IN: usize, const OUT: usize, InP, OutP, InQ, OutQ, C, T>
-    StepContext<'a, IN, OUT, InP, OutP, InQ, OutQ, C, T>
+impl<'graph, 'telemetry, 'clock, const IN: usize, const OUT: usize, InP, OutP, InQ, OutQ, C, T>
+    StepContext<'graph, 'telemetry, 'clock, IN, OUT, InP, OutP, InQ, OutQ, C, T>
 where
     InP: Payload,
     OutP: Payload,

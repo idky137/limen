@@ -15,6 +15,7 @@ use crate::{
     queue::{descriptor::EdgeDescriptor, SpscQueue},
 };
 
+pub mod bench;
 pub mod descriptor;
 pub mod validate;
 
@@ -100,12 +101,14 @@ pub trait GraphNodeContextBuilder<const I: usize, const IN: usize, const OUT: us
     ///
     /// # Returns
     /// A fully wired [`StepContext`] for the node, ready for execution.
-    fn make_step_context<C, T>(
-        &mut self,
-        clock: &C,
-        telemetry: &mut T,
+    fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
+        &'graph mut self,
+        clock: &'clock C,
+        telemetry: &'telemetry mut T,
     ) -> StepContext<
-        '_,
+        'graph,
+        'telemetry,
+        'clock,
         IN,
         OUT,
         <Self as GraphNodeTypes<I, IN, OUT>>::InP,
@@ -175,12 +178,23 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     ///
     /// Delegates to the node’s [`GraphNodeContextBuilder`] implementation.
     #[inline]
-    fn make_step_context_for_node<const I: usize, const IN: usize, const OUT: usize, C, T>(
-        &mut self,
-        clock: &C,
-        telemetry: &mut T,
+    fn make_step_context_for_node<
+        'graph,
+        'telemetry,
+        'clock,
+        const I: usize,
+        const IN: usize,
+        const OUT: usize,
+        C,
+        T,
+    >(
+        &'graph mut self,
+        clock: &'clock C,
+        telemetry: &'telemetry mut T,
     ) -> StepContext<
-        '_,
+        'graph,
+        'telemetry,
+        'clock,
         IN,
         OUT,
         <Self as GraphNodeTypes<I, IN, OUT>>::InP,
