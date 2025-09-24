@@ -1,4 +1,4 @@
-//! Edge descriptor types.
+//! Edge graph-link and descriptor types.
 
 use crate::{
     errors::QueueError,
@@ -7,19 +7,6 @@ use crate::{
     queue::{EnqueueResult, QueueOccupancy, SpscQueue},
     types::{EdgeIndex, PortId},
 };
-
-/// An edge couples one output port to one input port with an admission policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EdgeDescriptor {
-    /// Unique identifier of this edge in the graph.
-    pub id: EdgeIndex,
-    /// Identifier of the upstream node / port.
-    pub upstream: PortId,
-    /// Identifier of the downstream node / port.
-    pub downstream: PortId,
-    /// Optional static name (for diagnostics or graph tooling).
-    pub name: Option<&'static str>,
-}
 
 /// A lightweight descriptor that **links to** the concrete queue instance
 /// backing a graph edge, along with its routing and policy metadata.
@@ -165,4 +152,17 @@ where
     fn try_peek(&self) -> Result<&Self::Item, QueueError> {
         self.queue.try_peek()
     }
+}
+
+/// An edge couples one output port to one input port with an admission policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeDescriptor {
+    /// Unique identifier of this edge in the graph.
+    pub id: EdgeIndex,
+    /// Identifier of the upstream node / port.
+    pub upstream: PortId,
+    /// Identifier of the downstream node / port.
+    pub downstream: PortId,
+    /// Optional static name (for diagnostics or graph tooling).
+    pub name: Option<&'static str>,
 }

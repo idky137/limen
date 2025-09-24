@@ -18,12 +18,12 @@ pub use crate::graph::{
     GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes,
 };
 pub use crate::node::{
-    descriptor::{NodeDescriptor, NodeLink},
+    link::{NodeDescriptor, NodeLink},
     StepContext,
 };
 pub use crate::policy::EdgePolicy;
 pub use crate::queue::{
-    descriptor::{EdgeDescriptor, EdgeLink},
+    link::{EdgeDescriptor, EdgeLink},
     NoQueue,
 };
 pub use crate::types::{EdgeIndex, NodeIndex, PortId, PortIndex};

@@ -9,14 +9,15 @@
 //! Runtimes consume the **typed** `Graph` trait; tooling and codegen use descriptors.
 
 use crate::{
+    errors::GraphError,
+    graph::validate::{GraphDescBuf, GraphValidator},
     message::{payload::Payload, Message},
-    node::{descriptor::NodeDescriptor, StepContext},
+    node::{link::NodeDescriptor, StepContext},
     policy::EdgePolicy,
-    queue::{descriptor::EdgeDescriptor, SpscQueue},
+    queue::{link::EdgeDescriptor, SpscQueue},
 };
 
 pub mod bench;
-pub mod descriptor;
 pub mod validate;
 
 // pub mod builder;
@@ -137,6 +138,15 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
 
     /// Return static descriptors for all edges in the graph.
     fn get_edge_descriptors(&self) -> [EdgeDescriptor; EDGE_COUNT];
+
+    /// Return the GrapgDescBuf for this graph.
+    fn validate_graph(&self) -> Result<(), GraphError> {
+        GraphDescBuf {
+            nodes: self.get_node_descriptors(),
+            edges: self.get_edge_descriptors(),
+        }
+        .validate()
+    }
 
     /// Immutable access to node `I`.
     #[inline]

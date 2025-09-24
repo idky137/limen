@@ -25,19 +25,20 @@
 //!     }
 //! }
 //! ```
-//!
-//! Note: node and edges are NodeLink and EdgeLink.
 
 use crate::{
     graph::{GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes},
-    node::{StepContext, TestIdentityModelNodeU32, TestSinkNodeU32, TestSourceNodeU32},
+    node::{
+        bench::{TestIdentityModelNodeU32, TestSinkNodeU32, TestSourceNodeU32},
+        StepContext,
+    },
     policy::EdgePolicy,
     prelude::{EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink},
     queue::NoQueue,
     types::{EdgeIndex, NodeIndex, PortId, PortIndex},
 };
 
-type Q32 = crate::queue::spsc_array::StaticRing<crate::message::Message<u32>, 8>;
+type Q32 = crate::queue::bench::TestSpscRingBuf<crate::message::Message<u32>, 8>;
 
 const Q_32_POLICY: EdgePolicy = EdgePolicy {
     caps: crate::policy::QueueCaps {

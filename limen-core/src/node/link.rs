@@ -1,4 +1,4 @@
-//! Node descriptor types.
+//! Node graph-link descriptor types.
 
 use crate::{
     errors::NodeError,
@@ -8,25 +8,6 @@ use crate::{
     queue::SpscQueue,
     types::{NodeIndex, PortId, PortIndex},
 };
-
-/// A node descriptor: topology and policy metadata, without an executable instance.
-///
-/// `NodeDesc` captures static configuration of a node in the graph:
-/// its identity, kind, port counts, policy, and an optional name.
-/// It does not hold runtime state or implementation details.
-#[derive(Debug, Clone)]
-pub struct NodeDescriptor {
-    /// Unique identifier of this node in the graph.
-    pub id: NodeIndex,
-    /// High-level category of the node (source, process, sink, etc).
-    pub kind: NodeKind,
-    /// Number of input ports declared by this node.
-    pub in_ports: u16,
-    /// Number of output ports declared by this node.
-    pub out_ports: u16,
-    /// Optional static name (for diagnostics or graph tooling).
-    pub name: Option<&'static str>,
-}
 
 /// A lightweight descriptor that **links to** a concrete node instance and records its
 /// static topology and policy metadata.
@@ -221,4 +202,23 @@ where
     fn stop<C, T>(&mut self, clock: &C, telemetry: &mut T) -> Result<(), NodeError> {
         self.node.stop(clock, telemetry)
     }
+}
+
+/// A node descriptor: topology and policy metadata, without an executable instance.
+///
+/// `NodeDescriptor` captures static configuration of a node in the graph:
+/// its identity, kind, port counts, policy, and an optional name.
+/// It does not hold runtime state or implementation details.
+#[derive(Debug, Clone)]
+pub struct NodeDescriptor {
+    /// Unique identifier of this node in the graph.
+    pub id: NodeIndex,
+    /// High-level category of the node (source, process, sink, etc).
+    pub kind: NodeKind,
+    /// Number of input ports declared by this node.
+    pub in_ports: u16,
+    /// Number of output ports declared by this node.
+    pub out_ports: u16,
+    /// Optional static name (for diagnostics or graph tooling).
+    pub name: Option<&'static str>,
 }

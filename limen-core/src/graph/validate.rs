@@ -1,9 +1,41 @@
-//! Descriptor validation helpers (no-alloc port checks, acyclicity with/without `alloc`).
+//! Graph validation interface.
 
 use crate::errors::GraphError;
-use crate::node::descriptor::NodeDescriptor;
+use crate::node::link::NodeDescriptor;
 use crate::node::NodeKind;
-use crate::queue::descriptor::EdgeDescriptor;
+use crate::queue::link::EdgeDescriptor;
+
+/// An interface for descriptor validation (borrowed/owned/buffer).
+pub trait GraphValidator {
+    /// Validates the wiring of the graph.
+    fn validate(&self) -> Result<(), GraphError>;
+}
+
+/// Owned, no-alloc descriptor (arrays are stored by value).
+#[derive(Debug, Clone)]
+pub struct GraphDescBuf<const N: usize, const E: usize> {
+    /// Nodes descriptors.
+    pub nodes: [NodeDescriptor; N],
+    /// Edge descriptors.
+    pub edges: [EdgeDescriptor; E],
+}
+
+impl<const N: usize, const E: usize> GraphValidator for GraphDescBuf<N, E> {
+    #[inline]
+    fn validate(&self) -> Result<(), GraphError> {
+        validate_ports(&self.nodes, &self.edges)?;
+        #[cfg(not(feature = "alloc"))]
+        {
+            validate_acyclic_buf::<N>(&self.nodes, &self.edges)?;
+        }
+        #[cfg(feature = "alloc")]
+        {
+            validate_acyclic_alloc(&self.nodes, &self.edges)?;
+        }
+
+        Ok(())
+    }
+}
 
 /// Validate port bounds and uniqueness (no allocation).
 pub fn validate_ports(
@@ -70,70 +102,32 @@ pub fn validate_ports(
     Ok(())
 }
 
-/// Validate acyclicity using Kahn's algorithm (requires `alloc`).
-#[cfg(feature = "alloc")]
-pub fn validate_acyclic_alloc(
-    nodes: &[NodeDescriptor],
-    edges: &[EdgeDescriptor],
-) -> Result<(), GraphError> {
-    extern crate alloc;
-    use alloc::vec::Vec;
-
-    let n = nodes.len();
-    let mut indeg = vec![0usize; n];
-    for e in edges {
-        indeg[e.downstream.node.0] += 1;
-    }
-
-    let mut stack = Vec::with_capacity(n);
-    for i in 0..n {
-        if indeg[i] == 0 {
-            stack.push(i);
-        }
-    }
-
-    let mut visited = 0usize;
-    while let Some(u) = stack.pop() {
-        visited += 1;
-        for e in edges.iter().filter(|e| e.upstream.node.0 == u) {
-            let v = e.downstream.node.0;
-            indeg[v] -= 1;
-            if indeg[v] == 0 {
-                stack.push(v);
-            }
-        }
-    }
-
-    if visited != n {
-        return Err(GraphError::Cyclic);
-    }
-    Ok(())
-}
-
 /// Validate acyclicity without allocation using fixed-size arrays on the stack.
 ///
 /// This variant is intended for [`GraphDescBuf`] where `N` is known at compile-time.
 pub fn validate_acyclic_buf<const N: usize>(
-    nodes: &[NodeDescriptor; N],
+    _nodes: &[NodeDescriptor; N],
     edges: &[EdgeDescriptor],
 ) -> Result<(), GraphError> {
     // Simple Kahn's algorithm with stack-allocated arrays.
     let mut indeg = [0usize; N];
+
+    // Validate both ends and build indegree.
     for e in edges {
-        let to = e.downstream.node.0;
-        // Safety: descriptors are pre-validated, but guard anyway.
-        if to >= N {
+        let u = e.upstream.node.0;
+        let v = e.downstream.node.0;
+        if u >= N || v >= N {
             return Err(GraphError::IncompatiblePorts);
         }
-        indeg[to] += 1;
+        indeg[v] += 1;
     }
 
     let mut stack = [0usize; N];
     let mut top = 0usize;
 
     // Seed with zero indegree nodes.
-    for i in 0..N {
-        if indeg[i] == 0 {
+    for (i, &deg) in indeg.iter().enumerate() {
+        if deg == 0 {
             stack[top] = i;
             top += 1;
         }
@@ -146,10 +140,8 @@ pub fn validate_acyclic_buf<const N: usize>(
         visited += 1;
 
         for e in edges.iter().filter(|e| e.upstream.node.0 == u) {
-            let v = e.downstream.node.0;
-            if v >= N {
-                return Err(GraphError::IncompatiblePorts);
-            }
+            let v = e.downstream.node.0; // v ∈ [0, N) due to earlier validation
+            debug_assert!(v < N, "downstream index validated earlier");
             indeg[v] -= 1;
             if indeg[v] == 0 {
                 stack[top] = v;
@@ -159,6 +151,55 @@ pub fn validate_acyclic_buf<const N: usize>(
     }
 
     if visited != N {
+        return Err(GraphError::Cyclic);
+    }
+    Ok(())
+}
+
+/// Validate acyclicity using Kahn's algorithm (requires `alloc`).
+#[cfg(feature = "alloc")]
+pub fn validate_acyclic_alloc(
+    nodes: &[NodeDescriptor],
+    edges: &[EdgeDescriptor],
+) -> Result<(), GraphError> {
+    extern crate alloc;
+    use alloc::vec::Vec;
+
+    let n = nodes.len();
+    let mut indeg = vec![0usize; n];
+
+    // Validate indices and build indegree.
+    for e in edges {
+        let u = e.upstream.node.0;
+        let v = e.downstream.node.0;
+        if u >= n || v >= n {
+            return Err(GraphError::IncompatiblePorts);
+        }
+        indeg[v] += 1;
+    }
+
+    // Seed stack with zero-indegree nodes.
+    let mut stack = Vec::with_capacity(n);
+    for (i, &deg) in indeg.iter().take(n).enumerate() {
+        if deg == 0 {
+            stack.push(i);
+        }
+    }
+
+    // Kahn's main loop.
+    let mut visited = 0usize;
+    while let Some(u) = stack.pop() {
+        visited += 1;
+        for e in edges.iter().filter(|e| e.upstream.node.0 == u) {
+            let v = e.downstream.node.0; // v ∈ [0, n) due to earlier validation
+            indeg[v] -= 1;
+            if indeg[v] == 0 {
+                stack.push(v);
+            }
+        }
+    }
+
+    if visited != n {
         return Err(GraphError::Cyclic);
     }
     Ok(())
