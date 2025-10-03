@@ -2,7 +2,7 @@
 
 use super::*;
 
-use crate::edge::SpscQueue;
+use crate::edge::Edge;
 use crate::errors::NodeError;
 use crate::memory::{MemoryClass, PlacementAcceptance};
 use crate::message::Message;
@@ -112,8 +112,8 @@ impl Node<0, 1, (), u32> for TestSourceNodeU32 {
         ctx: &mut StepContext<0, 1, (), u32, InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
-        InQ: SpscQueue<Item = Message<()>>,
-        OutQ: SpscQueue<Item = Message<u32>>,
+        InQ: Edge<Item = Message<()>>,
+        OutQ: Edge<Item = Message<u32>>,
     {
         let header = self.make_header();
         let message = Message::new(header, self.next_value_to_emit);
@@ -220,8 +220,8 @@ impl Node<1, 1, u32, u32> for TestIdentityModelNodeU32 {
         ctx: &mut StepContext<1, 1, u32, u32, InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
-        InQ: SpscQueue<Item = Message<u32>>,
-        OutQ: SpscQueue<Item = Message<u32>>,
+        InQ: Edge<Item = Message<u32>>,
+        OutQ: Edge<Item = Message<u32>>,
     {
         let Ok(message) = ctx.in_try_pop(0) else {
             #[cfg(feature = "std")]
@@ -364,8 +364,8 @@ impl Node<1, 0, u32, ()> for TestSinkNodeU32 {
         ctx: &mut StepContext<1, 0, u32, (), InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
-        InQ: SpscQueue<Item = Message<u32>>,
-        OutQ: SpscQueue<Item = Message<()>>,
+        InQ: Edge<Item = Message<u32>>,
+        OutQ: Edge<Item = Message<()>>,
     {
         let Ok(message) = ctx.in_try_pop(0) else {
             #[cfg(feature = "std")]

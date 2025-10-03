@@ -1,6 +1,6 @@
 //! Tests for Core runtime.
 
-use crate::edge::QueueOccupancy;
+use crate::edge::EdgeOccupancy;
 use crate::graph::GraphApi;
 use crate::memory::PlacementAcceptance;
 use crate::message::{Message, MessageFlags};
@@ -111,7 +111,7 @@ fn core_pipeline_runs_with_nostd_runtime() {
 
     // quick validation + snapshot
     graph.validate_graph().unwrap();
-    let mut occ: [QueueOccupancy; 2] = [QueueOccupancy {
+    let mut occ: [EdgeOccupancy; 2] = [EdgeOccupancy {
         items: 0,
         bytes: 0,
         watermark: WatermarkState::AtOrAboveHard,
@@ -251,7 +251,7 @@ fn std_pipeline_runs_with_std_runtime() {
 
     // final snapshot
     {
-        let mut occ: [QueueOccupancy; 2] = [QueueOccupancy {
+        let mut occ: [EdgeOccupancy; 2] = [EdgeOccupancy {
             items: 0,
             bytes: 0,
             watermark: WatermarkState::AtOrAboveHard,

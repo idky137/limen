@@ -9,7 +9,7 @@ use core::ptr;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
@@ -125,7 +125,7 @@ impl<T> Drop for SpscAtomicRing<T> {
     }
 }
 
-impl<P: Payload + std::clone::Clone> SpscQueue for SpscAtomicRing<Message<P>> {
+impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
     type Item = Message<P>;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
@@ -167,11 +167,11 @@ impl<P: Payload + std::clone::Clone> SpscQueue for SpscAtomicRing<Message<P>> {
         Ok(item)
     }
 
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         let items = self.len();
         let bytes = self.bytes_in_queue.load(Ordering::Acquire);
         let watermark = policy.watermark(items, bytes);
-        QueueOccupancy {
+        EdgeOccupancy {
             items,
             bytes,
             watermark,

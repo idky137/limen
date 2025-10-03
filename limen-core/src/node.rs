@@ -6,7 +6,7 @@
 pub mod bench;
 pub mod link;
 
-use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::{NodeError, QueueError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
@@ -153,8 +153,8 @@ impl<'graph, 'telemetry, 'clock, const IN: usize, const OUT: usize, InP, OutP, I
 where
     InP: Payload,
     OutP: Payload,
-    InQ: SpscQueue<Item = Message<InP>>,
-    OutQ: SpscQueue<Item = Message<OutP>>,
+    InQ: Edge<Item = Message<InP>>,
+    OutQ: Edge<Item = Message<OutP>>,
 {
     /// Attempt to pop an item from the specified input queue.
     #[inline]
@@ -172,7 +172,7 @@ where
 
     /// Return a snapshot of occupancy of the specified input queue, used for telemetry and admission.
     #[inline]
-    pub fn in_occupancy(&self, i: usize) -> QueueOccupancy {
+    pub fn in_occupancy(&self, i: usize) -> EdgeOccupancy {
         debug_assert!(i < IN);
         self.inputs[i].occupancy(&self.in_policies[i])
     }
@@ -186,7 +186,7 @@ where
 
     /// Return a snapshot of occupancy of the specified output queue, used for telemetry and admission.
     #[inline]
-    pub fn out_occupancy(&self, o: usize) -> QueueOccupancy {
+    pub fn out_occupancy(&self, o: usize) -> EdgeOccupancy {
         debug_assert!(o < OUT);
         self.outputs[o].occupancy(&self.out_policies[o])
     }
@@ -235,8 +235,8 @@ where
         ctx: &mut StepContext<IN, OUT, InP, OutP, InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
-        InQ: SpscQueue<Item = Message<InP>>,
-        OutQ: SpscQueue<Item = Message<OutP>>;
+        InQ: Edge<Item = Message<InP>>,
+        OutQ: Edge<Item = Message<OutP>>;
 
     /// Handle watchdog timeouts by applying over-budget policy (degrade/default/skip).
     fn on_watchdog_timeout<C, T>(

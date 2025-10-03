@@ -27,7 +27,7 @@
 //! ```
 
 use crate::{
-    edge::{NoQueue, QueueOccupancy, SpscQueue as _},
+    edge::{Edge as _, EdgeOccupancy, NoQueue},
     errors::{GraphError, NodeError},
     graph::{GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes},
     node::{
@@ -144,7 +144,7 @@ impl GraphApi<3, 2> for TestPipeline {
     }
 
     #[inline]
-    fn edge_occupancy_for<const E: usize>(&self) -> Result<QueueOccupancy, GraphError> {
+    fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError> {
         let occ = match E {
             0 => {
                 let e = &self.edges.0;
@@ -160,7 +160,7 @@ impl GraphApi<3, 2> for TestPipeline {
     }
 
     #[inline]
-    fn write_all_edge_occupancies(&self, out: &mut [QueueOccupancy; 2]) -> Result<(), GraphError> {
+    fn write_all_edge_occupancies(&self, out: &mut [EdgeOccupancy; 2]) -> Result<(), GraphError> {
         out[0] = self.edge_occupancy_for::<0>()?;
         out[1] = self.edge_occupancy_for::<1>()?;
         Ok(())
@@ -169,7 +169,7 @@ impl GraphApi<3, 2> for TestPipeline {
     #[inline]
     fn refresh_occupancies_for_node<const I: usize, const IN: usize, const OUT: usize>(
         &self,
-        out: &mut [QueueOccupancy; 2],
+        out: &mut [EdgeOccupancy; 2],
     ) -> Result<(), GraphError> {
         let node_idx = NodeIndex::from(I);
         // Iterate *all* edges; update those where this node is upstream OR downstream.
@@ -797,7 +797,7 @@ pub mod concurrent_graph {
         }
 
         #[inline]
-        fn edge_occupancy_for<const E: usize>(&self) -> Result<QueueOccupancy, GraphError> {
+        fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError> {
             let occ = match E {
                 0 => {
                     let e = &self.edges.0;
@@ -815,7 +815,7 @@ pub mod concurrent_graph {
         #[inline]
         fn write_all_edge_occupancies(
             &self,
-            out: &mut [QueueOccupancy; 2],
+            out: &mut [EdgeOccupancy; 2],
         ) -> Result<(), GraphError> {
             out[0] = self.edge_occupancy_for::<0>()?;
             out[1] = self.edge_occupancy_for::<1>()?;
@@ -825,7 +825,7 @@ pub mod concurrent_graph {
         #[inline]
         fn refresh_occupancies_for_node<const I: usize, const IN: usize, const OUT: usize>(
             &self,
-            out: &mut [QueueOccupancy; 2],
+            out: &mut [EdgeOccupancy; 2],
         ) -> Result<(), GraphError> {
             let node_idx = NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {

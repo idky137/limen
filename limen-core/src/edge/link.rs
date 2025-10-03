@@ -1,7 +1,7 @@
 //! Edge graph-link and descriptor types.
 
 use crate::{
-    edge::{EnqueueResult, QueueOccupancy, SpscQueue},
+    edge::{Edge, EdgeOccupancy, EnqueueResult},
     errors::QueueError,
     message::{payload::Payload, Message},
     policy::EdgePolicy,
@@ -22,7 +22,7 @@ use crate::{
 pub struct EdgeLink<Q, P>
 where
     P: Payload,
-    Q: SpscQueue<Item = Message<P>>,
+    Q: Edge<Item = Message<P>>,
 {
     /// Borrowed handle to the concrete queue instance for this edge.
     queue: Q,
@@ -49,7 +49,7 @@ where
 impl<Q, P> EdgeLink<Q, P>
 where
     P: Payload,
-    Q: SpscQueue<Item = Message<P>>,
+    Q: Edge<Item = Message<P>>,
 {
     /// Construct a new `EdgeLink` that borrows the given queue and records its metadata.
     #[inline]
@@ -126,10 +126,10 @@ where
     }
 }
 
-impl<Q, P> SpscQueue for EdgeLink<Q, P>
+impl<Q, P> Edge for EdgeLink<Q, P>
 where
     P: Payload + Clone,
-    Q: SpscQueue<Item = Message<P>>,
+    Q: Edge<Item = Message<P>>,
 {
     type Item = Message<P>;
 
@@ -144,7 +144,7 @@ where
     }
 
     #[inline]
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         self.queue.occupancy(policy)
     }
 
@@ -178,7 +178,7 @@ pub struct EdgeDescriptor {
 pub struct ConcurrentEdgeLink<Q, P>
 where
     P: Payload,
-    Q: SpscQueue<Item = Message<P>>,
+    Q: Edge<Item = Message<P>>,
 {
     /// Shared, thread-safe buffer for this edge.
     buf: std::sync::Arc<std::sync::Mutex<Q>>,
@@ -200,7 +200,7 @@ where
 impl<Q, P> ConcurrentEdgeLink<Q, P>
 where
     P: Payload,
-    Q: SpscQueue<Item = Message<P>>,
+    Q: Edge<Item = Message<P>>,
 {
     /// Create from a concrete queue and edge metadata.
     ///
@@ -251,10 +251,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<Q, P> crate::edge::SpscQueue for ConcurrentEdgeLink<Q, P>
+impl<Q, P> crate::edge::Edge for ConcurrentEdgeLink<Q, P>
 where
     P: crate::message::payload::Payload + Clone,
-    Q: crate::edge::SpscQueue<Item = crate::message::Message<P>> + Send + 'static,
+    Q: crate::edge::Edge<Item = crate::message::Message<P>> + Send + 'static,
 {
     type Item = crate::message::Message<P>;
 
@@ -279,10 +279,10 @@ where
     }
 
     #[inline]
-    fn occupancy(&self, policy: &crate::policy::EdgePolicy) -> crate::edge::QueueOccupancy {
+    fn occupancy(&self, policy: &crate::policy::EdgePolicy) -> crate::edge::EdgeOccupancy {
         match self.buf.lock() {
             Ok(q) => q.occupancy(policy),
-            Err(_) => crate::edge::QueueOccupancy {
+            Err(_) => crate::edge::EdgeOccupancy {
                 items: 0,
                 bytes: 0,
                 watermark: crate::policy::WatermarkState::AtOrAboveHard,

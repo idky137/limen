@@ -1,6 +1,6 @@
 //! (Work)bench [test] Runtime implementation.
 
-use crate::edge::QueueOccupancy;
+use crate::edge::EdgeOccupancy;
 use crate::errors::{NodeErrorKind, RuntimeError};
 use crate::graph::GraphApi;
 use crate::policy::WatermarkState;
@@ -15,7 +15,7 @@ use super::LimenRuntime;
 pub struct TestNoStdRuntime<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     stop: bool,
     next: usize,
-    occ: [QueueOccupancy; EDGE_COUNT],
+    occ: [EdgeOccupancy; EDGE_COUNT],
     _clock: PhantomData<()>,
     _telemetry: PhantomData<()>,
 }
@@ -23,7 +23,7 @@ pub struct TestNoStdRuntime<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
 impl<const NODE_COUNT: usize, const EDGE_COUNT: usize> TestNoStdRuntime<NODE_COUNT, EDGE_COUNT> {
     /// Construct with a pessimistic initial occupancy; `init()` will overwrite it.
     pub const fn new() -> Self {
-        const INIT_OCC: QueueOccupancy = QueueOccupancy {
+        const INIT_OCC: EdgeOccupancy = EdgeOccupancy {
             items: 0,
             bytes: 0,
             // Any value is fine; init() will replace the whole array.
@@ -97,7 +97,7 @@ where
     }
 
     #[inline]
-    fn occupancies(&self) -> &[QueueOccupancy; EDGE_COUNT] {
+    fn occupancies(&self) -> &[EdgeOccupancy; EDGE_COUNT] {
         &self.occ
     }
 
@@ -164,7 +164,7 @@ impl<const NODE_COUNT: usize, const EDGE_COUNT: usize> Default
 /// ===== std test runtime: one worker thread per node =====
 #[cfg(feature = "std")]
 pub mod concurrent_runtime {
-    use crate::edge::QueueOccupancy;
+    use crate::edge::EdgeOccupancy;
     use crate::errors::{GraphError, NodeErrorKind, RuntimeError};
     use crate::graph::GraphApi;
     use crate::node::StepResult;
@@ -176,7 +176,7 @@ pub mod concurrent_runtime {
     pub struct TestStdRuntime<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
         stop: bool,
         next: usize,
-        occ: [QueueOccupancy; EDGE_COUNT],
+        occ: [EdgeOccupancy; EDGE_COUNT],
         workers: Vec<mpsc::Sender<WorkerCmd>>,
         handles: Vec<std::thread::JoinHandle<()>>,
         // simple flag to know if workers are currently running
@@ -196,7 +196,7 @@ pub mod concurrent_runtime {
         /// Construct with a pessimistic initial occupancy; `init()` will overwrite it.
         pub fn new() -> Self {
             use crate::policy::WatermarkState;
-            let init_occ = QueueOccupancy {
+            let init_occ = EdgeOccupancy {
                 items: 0,
                 bytes: 0,
                 watermark: WatermarkState::AtOrAboveHard,
@@ -361,7 +361,7 @@ pub mod concurrent_runtime {
         }
 
         #[inline]
-        fn occupancies(&self) -> &[QueueOccupancy; EDGE_COUNT] {
+        fn occupancies(&self) -> &[EdgeOccupancy; EDGE_COUNT] {
             &self.occ
         }
 

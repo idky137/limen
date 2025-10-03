@@ -1,7 +1,7 @@
 //! Node graph-link descriptor types.
 
 use crate::{
-    edge::SpscQueue,
+    edge::Edge,
     errors::NodeError,
     memory::PlacementAcceptance,
     message::{payload::Payload, Message},
@@ -183,8 +183,8 @@ where
         ctx: &mut StepContext<IN, OUT, InP, OutP, InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
-        InQ: SpscQueue<Item = Message<InP>>,
-        OutQ: SpscQueue<Item = Message<OutP>>,
+        InQ: Edge<Item = Message<InP>>,
+        OutQ: Edge<Item = Message<OutP>>,
     {
         self.node.step(ctx)
     }

@@ -4,7 +4,7 @@
 //! and routes `try_push` by inspecting the message header's QoS class. `try_pop`
 //! always prefers the high-priority lane when available.
 
-use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::EdgePolicy;
@@ -13,8 +13,8 @@ use crate::types::QoSClass;
 /// Two-lane priority queue.
 pub struct Priority2<QHi, QLo, P>
 where
-    QHi: SpscQueue<Item = Message<P>>,
-    QLo: SpscQueue<Item = Message<P>>,
+    QHi: Edge<Item = Message<P>>,
+    QLo: Edge<Item = Message<P>>,
     P: Payload,
 {
     hi: QHi,
@@ -24,8 +24,8 @@ where
 
 impl<QHi, QLo, P> Priority2<QHi, QLo, P>
 where
-    QHi: SpscQueue<Item = Message<P>>,
-    QLo: SpscQueue<Item = Message<P>>,
+    QHi: Edge<Item = Message<P>>,
+    QLo: Edge<Item = Message<P>>,
     P: Payload,
 {
     /// Build a two-lane priority queue from hi/lo queues.
@@ -38,10 +38,10 @@ where
     }
 }
 
-impl<QHi, QLo, P> SpscQueue for Priority2<QHi, QLo, P>
+impl<QHi, QLo, P> Edge for Priority2<QHi, QLo, P>
 where
-    QHi: SpscQueue<Item = Message<P>>,
-    QLo: SpscQueue<Item = Message<P>>,
+    QHi: Edge<Item = Message<P>>,
+    QLo: Edge<Item = Message<P>>,
     P: Payload + Clone,
 {
     type Item = Message<P>;
@@ -61,13 +61,13 @@ where
         }
     }
 
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         let hi = self.hi.occupancy(policy);
         let lo = self.lo.occupancy(policy);
         let items = hi.items + lo.items;
         let bytes = hi.bytes + lo.bytes;
         let watermark = policy.watermark(items, bytes);
-        QueueOccupancy {
+        EdgeOccupancy {
             items,
             bytes,
             watermark,

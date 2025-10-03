@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{EdgePolicy, WatermarkState};
@@ -31,10 +31,10 @@ impl<Q> ConcurrentQueue<Q> {
     }
 }
 
-impl<P, Q> SpscQueue for ConcurrentQueue<Q>
+impl<P, Q> Edge for ConcurrentQueue<Q>
 where
     P: Payload + Clone,
-    Q: SpscQueue<Item = Message<P>> + Send + 'static,
+    Q: Edge<Item = Message<P>> + Send + 'static,
 {
     type Item = Message<P>;
 
@@ -55,10 +55,10 @@ where
     }
 
     #[inline]
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         match self.inner.lock() {
             Ok(q) => q.occupancy(policy),
-            Err(_) => QueueOccupancy {
+            Err(_) => EdgeOccupancy {
                 items: 0,
                 bytes: 0,
                 watermark: WatermarkState::AtOrAboveHard,
@@ -96,7 +96,7 @@ impl<Q> Clone for ConcurrentQueue<Q> {
 pub struct ProducerEndpoint<P, QWrap>
 where
     P: Payload,
-    QWrap: SpscQueue<Item = Message<P>> + Send + 'static,
+    QWrap: Edge<Item = Message<P>> + Send + 'static,
 {
     q: QWrap,
     _p: core::marker::PhantomData<P>,
@@ -105,7 +105,7 @@ where
 impl<P, QWrap> ProducerEndpoint<P, QWrap>
 where
     P: Payload,
-    QWrap: SpscQueue<Item = Message<P>> + Send + 'static,
+    QWrap: Edge<Item = Message<P>> + Send + 'static,
 {
     /// Creates a new ProducerEndpoint.
     pub fn new(q: QWrap) -> Self {
@@ -121,10 +121,10 @@ where
     }
 }
 
-impl<P, QWrap> SpscQueue for ProducerEndpoint<P, QWrap>
+impl<P, QWrap> Edge for ProducerEndpoint<P, QWrap>
 where
     P: Payload + Clone,
-    QWrap: SpscQueue<Item = Message<P>> + Send + 'static,
+    QWrap: Edge<Item = Message<P>> + Send + 'static,
 {
     type Item = Message<P>;
     #[inline]
@@ -136,7 +136,7 @@ where
         Err(QueueError::Empty)
     }
     #[inline]
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         self.q.occupancy(policy)
     }
     #[inline]
@@ -155,7 +155,7 @@ where
 pub struct ConsumerEndpoint<P, QWrap>
 where
     P: Payload,
-    QWrap: SpscQueue<Item = Message<P>> + Send + 'static,
+    QWrap: Edge<Item = Message<P>> + Send + 'static,
 {
     q: QWrap,
     _p: core::marker::PhantomData<P>,
@@ -164,7 +164,7 @@ where
 impl<P, QWrap> ConsumerEndpoint<P, QWrap>
 where
     P: Payload,
-    QWrap: SpscQueue<Item = Message<P>> + Send + 'static,
+    QWrap: Edge<Item = Message<P>> + Send + 'static,
 {
     /// Creates a new ConsumerEndpoint.
     pub fn new(q: QWrap) -> Self {
@@ -180,10 +180,10 @@ where
     }
 }
 
-impl<P, QWrap> SpscQueue for ConsumerEndpoint<P, QWrap>
+impl<P, QWrap> Edge for ConsumerEndpoint<P, QWrap>
 where
     P: Payload + Clone,
-    QWrap: SpscQueue<Item = Message<P>> + Send + 'static,
+    QWrap: Edge<Item = Message<P>> + Send + 'static,
 {
     type Item = Message<P>;
     #[inline]
@@ -195,7 +195,7 @@ where
         self.q.try_pop()
     }
     #[inline]
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         self.q.occupancy(policy)
     }
     #[inline]

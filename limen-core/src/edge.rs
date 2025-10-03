@@ -36,7 +36,7 @@ pub enum EnqueueResult {
 
 /// Queue occupancy snapshot used for decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueOccupancy {
+pub struct EdgeOccupancy {
     /// Number of items currently in the queue.
     pub items: usize,
     /// Estimated bytes currently in the queue.
@@ -49,7 +49,7 @@ pub struct QueueOccupancy {
 ///
 /// The `Item` type is typically a [`Message<P>`](Message) with some payload `P`,
 /// but the trait is generic and can be used for other types as needed.
-pub trait SpscQueue {
+pub trait Edge {
     /// The type of items stored in the queue.
     type Item: Clone;
 
@@ -62,7 +62,7 @@ pub trait SpscQueue {
     fn try_pop(&mut self) -> Result<Self::Item, QueueError>;
 
     /// Return a snapshot of occupancy used for telemetry and admission.
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy;
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy;
 
     /// Return `true` if the queue is empty.
     fn is_empty(&self) -> bool {
@@ -86,7 +86,7 @@ pub trait SpscQueue {
 }
 
 /// Convenience helper to enqueue a message using policy-derived admission logic.
-pub fn enqueue_with_admission<P: Payload, Q: SpscQueue<Item = Message<P>>>(
+pub fn enqueue_with_admission<P: Payload, Q: Edge<Item = Message<P>>>(
     queue: &mut Q,
     policy: &EdgePolicy,
     msg: Message<P>,
@@ -121,7 +121,7 @@ pub fn enqueue_with_admission<P: Payload, Q: SpscQueue<Item = Message<P>>>(
 ///   [`WatermarkState::AtOrAboveHard`] (fully saturated, disallowing admission).
 pub struct NoQueue<P: Payload>(core::marker::PhantomData<P>);
 
-impl<P: Payload + Clone> SpscQueue for NoQueue<P> {
+impl<P: Payload + Clone> Edge for NoQueue<P> {
     type Item = Message<P>;
     #[inline]
     fn try_push(&mut self, _item: Self::Item, _policy: &EdgePolicy) -> EnqueueResult {
@@ -132,8 +132,8 @@ impl<P: Payload + Clone> SpscQueue for NoQueue<P> {
         Err(QueueError::Empty)
     }
     #[inline]
-    fn occupancy(&self, _policy: &EdgePolicy) -> QueueOccupancy {
-        QueueOccupancy {
+    fn occupancy(&self, _policy: &EdgePolicy) -> EdgeOccupancy {
+        EdgeOccupancy {
             items: 0,
             bytes: 0,
             watermark: WatermarkState::AtOrAboveHard,

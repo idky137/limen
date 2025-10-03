@@ -1,6 +1,6 @@
 //! (Work)bench [test] Queue implementation.
 
-use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps, WatermarkState};
 
@@ -95,7 +95,7 @@ impl<T: Clone, const N: usize> TestSpscRingBuf<T, N> {
     }
 }
 
-impl<T: Clone, const N: usize> SpscQueue for TestSpscRingBuf<T, N> {
+impl<T: Clone, const N: usize> Edge for TestSpscRingBuf<T, N> {
     type Item = T;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
@@ -130,11 +130,11 @@ impl<T: Clone, const N: usize> SpscQueue for TestSpscRingBuf<T, N> {
         Ok(item)
     }
 
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         let items = self.len;
         let bytes = self.current_bytes();
         let watermark = self.watermark_state(&policy.caps);
-        QueueOccupancy {
+        EdgeOccupancy {
             items,
             bytes,
             watermark,

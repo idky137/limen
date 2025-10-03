@@ -3,7 +3,7 @@
 //! Uses a fixed-size [Option<T>; N] ring. No unsafe; no heap.
 //! Tracks both item and byte occupancy; supports DropOldest between watermarks.
 
-use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
@@ -53,7 +53,7 @@ impl<T, const N: usize> StaticRing<T, N> {
     }
 }
 
-impl<P: Payload + Clone, const N: usize> SpscQueue for StaticRing<Message<P>, N> {
+impl<P: Payload + Clone, const N: usize> Edge for StaticRing<Message<P>, N> {
     type Item = Message<P>;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
@@ -94,11 +94,11 @@ impl<P: Payload + Clone, const N: usize> SpscQueue for StaticRing<Message<P>, N>
         Ok(item)
     }
 
-    fn occupancy(&self, policy: &EdgePolicy) -> QueueOccupancy {
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         let items = self.len;
         let bytes = self.bytes;
         let watermark = policy.watermark(items, bytes);
-        QueueOccupancy {
+        EdgeOccupancy {
             items,
             bytes,
             watermark,

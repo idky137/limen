@@ -5,7 +5,7 @@ pub mod bench;
 #[cfg(test)]
 mod tests;
 
-use crate::{edge::QueueOccupancy, graph::GraphApi};
+use crate::{edge::EdgeOccupancy, graph::GraphApi};
 
 /// A single, uniform runtime trait that all Limen runtimes (P0, P1, P2, P2Concurrent)
 /// can implement. The API is allocation- and threading-agnostic.
@@ -43,7 +43,7 @@ where
     fn is_stopping(&self) -> bool;
 
     /// Borrow the runtime’s persistent edge-occupancy buffer.
-    fn occupancies(&self) -> &[QueueOccupancy; EDGE_COUNT];
+    fn occupancies(&self) -> &[EdgeOccupancy; EDGE_COUNT];
 
     /// Execute one scheduler tick. Return `Ok(true)` if more work remains, `Ok(false)` to stop.
     fn step(&mut self, graph: &mut Graph) -> Result<bool, Self::Error>;

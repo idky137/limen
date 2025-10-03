@@ -11,7 +11,7 @@
 use crate::node::Node;
 
 use crate::{
-    edge::{link::EdgeDescriptor, QueueOccupancy, SpscQueue},
+    edge::{link::EdgeDescriptor, Edge, EdgeOccupancy},
     errors::{GraphError, NodeError},
     graph::validate::{GraphDescBuf, GraphValidator},
     message::{payload::Payload, Message},
@@ -77,10 +77,10 @@ pub trait GraphNodeTypes<const I: usize, const IN: usize, const OUT: usize> {
     type OutP: Payload;
 
     /// Queue type used for input ports.
-    type InQ: SpscQueue<Item = Message<Self::InP>>;
+    type InQ: Edge<Item = Message<Self::InP>>;
 
     /// Queue type used for output ports.
-    type OutQ: SpscQueue<Item = Message<Self::OutP>>;
+    type OutQ: Edge<Item = Message<Self::OutP>>;
 }
 
 /// Builder for per-node execution contexts.
@@ -244,7 +244,7 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     ///
     /// Returns a [`GraphError`] if `E` is out of range or the occupancy cannot
     /// be sampled.
-    fn edge_occupancy_for<const E: usize>(&self) -> Result<QueueOccupancy, GraphError>;
+    fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError>;
 
     /// Writes occupancy snapshots for **all** edges into `out`.
     ///
@@ -256,7 +256,7 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     /// Returns a [`GraphError`] if any edge occupancy cannot be sampled.
     fn write_all_edge_occupancies(
         &self,
-        out: &mut [QueueOccupancy; EDGE_COUNT],
+        out: &mut [EdgeOccupancy; EDGE_COUNT],
     ) -> Result<(), GraphError>;
 
     /// Refreshes occupancies only for edges incident to node `I`.
@@ -276,7 +276,7 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     /// occupancies cannot be sampled.
     fn refresh_occupancies_for_node<const I: usize, const IN: usize, const OUT: usize>(
         &self,
-        out: &mut [QueueOccupancy; EDGE_COUNT],
+        out: &mut [EdgeOccupancy; EDGE_COUNT],
     ) -> Result<(), GraphError>;
 
     // ----- Generic step-by-index (for P0/P1) -----
