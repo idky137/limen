@@ -3,10 +3,10 @@
 //! Uses a fixed-size [Option<T>; N] ring. No unsafe; no heap.
 //! Tracks both item and byte occupancy; supports DropOldest between watermarks.
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 
 /// A fixed-capacity ring buffer for single-producer/single-consumer usage.
 pub struct StaticRing<T, const N: usize> {

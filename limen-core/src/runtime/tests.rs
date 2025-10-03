@@ -1,16 +1,16 @@
 //! Tests for Core runtime.
 
+use crate::edge::QueueOccupancy;
 use crate::graph::GraphApi;
 use crate::memory::PlacementAcceptance;
 use crate::message::{Message, MessageFlags};
 use crate::node::{NodeCapabilities, NodePolicy};
 use crate::policy::{BatchingPolicy, BudgetPolicy, DeadlinePolicy, WatermarkState};
-use crate::queue::QueueOccupancy;
 use crate::runtime::LimenRuntime;
 use crate::types::{QoSClass, SequenceNumber, Ticks, TraceId};
 
 // Concrete queue type used by the test pipelines (matches your bench graphs)
-type Q32 = crate::queue::bench::TestSpscRingBuf<Message<u32>, 8>;
+type Q32 = crate::edge::bench::TestSpscRingBuf<Message<u32>, 8>;
 
 // -------------------------------------------------------------
 // core (no_std) pipeline + no_std test runtime (single-threaded)

@@ -4,10 +4,10 @@
 //! and routes `try_push` by inspecting the message header's QoS class. `try_pop`
 //! always prefers the high-priority lane when available.
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::EdgePolicy;
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::types::QoSClass;
 
 /// Two-lane priority queue.

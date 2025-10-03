@@ -1,7 +1,4 @@
-//! Single-producer single-consumer queue trait and related types.
-//!
-//! Concrete implementations live in `limen-light` (P0/P1) and `limen` (P2).
-//! The core defines capacities, watermarking, admission, and generic results.
+//! Limen single-producer single-consumer edge trait and related types.
 
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};

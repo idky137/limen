@@ -7,10 +7,10 @@ extern crate alloc;
 
 use alloc::collections::VecDeque;
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 
 /// Heap ring with fixed item capacity.
 pub struct HeapRing<T> {

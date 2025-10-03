@@ -11,12 +11,12 @@
 use crate::node::Node;
 
 use crate::{
+    edge::{link::EdgeDescriptor, QueueOccupancy, SpscQueue},
     errors::{GraphError, NodeError},
     graph::validate::{GraphDescBuf, GraphValidator},
     message::{payload::Payload, Message},
     node::{link::NodeDescriptor, NodePolicy, StepContext, StepResult},
     policy::EdgePolicy,
-    queue::{link::EdgeDescriptor, QueueOccupancy, SpscQueue},
 };
 
 pub mod bench;

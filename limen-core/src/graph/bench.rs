@@ -27,6 +27,7 @@
 //! ```
 
 use crate::{
+    edge::{NoQueue, QueueOccupancy, SpscQueue as _},
     errors::{GraphError, NodeError},
     graph::{GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes},
     node::{
@@ -35,11 +36,10 @@ use crate::{
     },
     policy::EdgePolicy,
     prelude::{EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink},
-    queue::{NoQueue, QueueOccupancy, SpscQueue as _},
     types::{EdgeIndex, NodeIndex, PortId, PortIndex},
 };
 
-type Q32 = crate::queue::bench::TestSpscRingBuf<crate::message::Message<u32>, 8>;
+type Q32 = crate::edge::bench::TestSpscRingBuf<crate::message::Message<u32>, 8>;
 
 const Q_32_POLICY: EdgePolicy = EdgePolicy {
     caps: crate::policy::QueueCaps {
@@ -614,6 +614,11 @@ pub mod concurrent_graph {
     use super::*;
 
     use crate::{
+        edge::{
+            link::ConcurrentEdgeLink,
+            spsc_concurrent::{ConcurrentQueue, ConsumerEndpoint, ProducerEndpoint},
+            NoQueue,
+        },
         graph::{
             GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder,
             GraphNodeOwnedEndpointHandoff, GraphNodeTypes,
@@ -624,11 +629,6 @@ pub mod concurrent_graph {
         },
         policy::EdgePolicy,
         prelude::{EdgeDescriptor, NodeDescriptor, NodeLink},
-        queue::{
-            link::ConcurrentEdgeLink,
-            spsc_concurrent::{ConcurrentQueue, ConsumerEndpoint, ProducerEndpoint},
-            NoQueue,
-        },
         types::{EdgeIndex, NodeIndex, PortId, PortIndex},
     };
 

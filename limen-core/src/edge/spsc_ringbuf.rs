@@ -7,10 +7,10 @@ use ringbuf::traits::{
 };
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 
 /// A single-producer single-consumer (SPSC) queue backed by the [`ringbuf`] crate.
 ///

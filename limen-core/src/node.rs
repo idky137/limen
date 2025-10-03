@@ -6,11 +6,11 @@
 pub mod bench;
 pub mod link;
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::{NodeError, QueueError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{BatchingPolicy, BudgetPolicy, DeadlinePolicy, EdgePolicy};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::telemetry::Telemetry;
 use crate::types::Ticks;
 

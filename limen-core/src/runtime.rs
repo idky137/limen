@@ -5,7 +5,7 @@ pub mod bench;
 #[cfg(test)]
 mod tests;
 
-use crate::{graph::GraphApi, queue::QueueOccupancy};
+use crate::{edge::QueueOccupancy, graph::GraphApi};
 
 /// A single, uniform runtime trait that all Limen runtimes (P0, P1, P2, P2Concurrent)
 /// can implement. The API is allocation- and threading-agnostic.

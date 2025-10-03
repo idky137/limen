@@ -1,10 +1,10 @@
 //! Edge graph-link and descriptor types.
 
 use crate::{
+    edge::{EnqueueResult, QueueOccupancy, SpscQueue},
     errors::QueueError,
     message::{payload::Payload, Message},
     policy::EdgePolicy,
-    queue::{EnqueueResult, QueueOccupancy, SpscQueue},
     types::{EdgeIndex, PortId},
 };
 
@@ -251,10 +251,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<Q, P> crate::queue::SpscQueue for ConcurrentEdgeLink<Q, P>
+impl<Q, P> crate::edge::SpscQueue for ConcurrentEdgeLink<Q, P>
 where
     P: crate::message::payload::Payload + Clone,
-    Q: crate::queue::SpscQueue<Item = crate::message::Message<P>> + Send + 'static,
+    Q: crate::edge::SpscQueue<Item = crate::message::Message<P>> + Send + 'static,
 {
     type Item = crate::message::Message<P>;
 
@@ -263,10 +263,10 @@ where
         &mut self,
         item: Self::Item,
         policy: &crate::policy::EdgePolicy,
-    ) -> crate::queue::EnqueueResult {
+    ) -> crate::edge::EnqueueResult {
         match self.buf.lock() {
             Ok(mut q) => q.try_push(item, policy),
-            Err(_) => crate::queue::EnqueueResult::Rejected,
+            Err(_) => crate::edge::EnqueueResult::Rejected,
         }
     }
 
@@ -279,10 +279,10 @@ where
     }
 
     #[inline]
-    fn occupancy(&self, policy: &crate::policy::EdgePolicy) -> crate::queue::QueueOccupancy {
+    fn occupancy(&self, policy: &crate::policy::EdgePolicy) -> crate::edge::QueueOccupancy {
         match self.buf.lock() {
             Ok(q) => q.occupancy(policy),
-            Err(_) => crate::queue::QueueOccupancy {
+            Err(_) => crate::edge::QueueOccupancy {
                 items: 0,
                 bytes: 0,
                 watermark: crate::policy::WatermarkState::AtOrAboveHard,

@@ -2,11 +2,11 @@
 
 use super::*;
 
+use crate::edge::SpscQueue;
 use crate::errors::NodeError;
 use crate::memory::{MemoryClass, PlacementAcceptance};
 use crate::message::Message;
 use crate::message::{MessageFlags, MessageHeader};
-use crate::queue::SpscQueue;
 use crate::types::{DeadlineNs, QoSClass, SequenceNumber, Ticks, TraceId};
 
 use core::fmt::Write;

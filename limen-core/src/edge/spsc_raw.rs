@@ -9,10 +9,10 @@ use core::ptr;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 
 /// A high-performance, bounded, single-producer single-consumer ring buffer.
 ///

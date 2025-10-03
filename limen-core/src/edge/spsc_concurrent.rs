@@ -2,10 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{EdgePolicy, WatermarkState};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 
 /// Thread-safe wrapper: makes ANY `Q: SpscQueue` cloneable + `Send + 'static`.
 pub struct ConcurrentQueue<Q> {

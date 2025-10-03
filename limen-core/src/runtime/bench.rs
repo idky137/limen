@@ -1,9 +1,9 @@
 //! (Work)bench [test] Runtime implementation.
 
+use crate::edge::QueueOccupancy;
 use crate::errors::{NodeErrorKind, RuntimeError};
 use crate::graph::GraphApi;
 use crate::policy::WatermarkState;
-use crate::queue::QueueOccupancy;
 use core::marker::PhantomData;
 
 use super::LimenRuntime;
@@ -164,10 +164,10 @@ impl<const NODE_COUNT: usize, const EDGE_COUNT: usize> Default
 /// ===== std test runtime: one worker thread per node =====
 #[cfg(feature = "std")]
 pub mod concurrent_runtime {
+    use crate::edge::QueueOccupancy;
     use crate::errors::{GraphError, NodeErrorKind, RuntimeError};
     use crate::graph::GraphApi;
     use crate::node::StepResult;
-    use crate::queue::QueueOccupancy;
     use std::any::Any;
     use std::sync::mpsc;
     use std::thread;

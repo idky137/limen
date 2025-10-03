@@ -1,9 +1,9 @@
 //! Graph validation interface.
 
+use crate::edge::link::EdgeDescriptor;
 use crate::errors::GraphError;
 use crate::node::link::NodeDescriptor;
 use crate::node::NodeKind;
-use crate::queue::link::EdgeDescriptor;
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;

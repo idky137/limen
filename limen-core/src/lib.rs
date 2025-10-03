@@ -19,7 +19,7 @@
 //! - [`memory`]: memory classes and placement descriptors for zero-copy paths.
 //! - [`message`]: message header, payload contract, and message types.
 //! - [`policy`]: batching, budgets, deadlines, admission and edge policies.
-//! - [`queue`]: single-producer single-consumer queue trait and results.
+//! - [`edge`]: single-producer single-consumer queue trait and results.
 //! - [`node`]: uniform node contract and step lifecycle.
 //! - [`routing`]: split (fan-out) and join (fan-in) operator traits.
 //! - [`telemetry`]: counters, histograms, and tracing interfaces.
@@ -49,9 +49,9 @@ pub mod policy;
 pub mod scheduling;
 
 pub mod compute;
+pub mod edge;
 pub mod graph;
 pub mod node;
-pub mod queue;
 pub mod runtime;
 
 pub mod prelude;

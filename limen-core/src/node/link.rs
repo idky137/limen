@@ -1,11 +1,11 @@
 //! Node graph-link descriptor types.
 
 use crate::{
+    edge::SpscQueue,
     errors::NodeError,
     memory::PlacementAcceptance,
     message::{payload::Payload, Message},
     node::{Node, NodeCapabilities, NodeKind, NodePolicy, StepContext, StepResult},
-    queue::SpscQueue,
     types::{NodeIndex, PortId, PortIndex},
 };
 

@@ -1,8 +1,8 @@
 //! (Work)bench [test] Queue implementation.
 
+use crate::edge::{EnqueueResult, QueueOccupancy, SpscQueue};
 use crate::errors::QueueError;
 use crate::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps, WatermarkState};
-use crate::queue::{EnqueueResult, QueueOccupancy, SpscQueue};
 
 /// A simple, no-alloc, no-unsafe SPSC ring buffer for tests that honors `EdgePolicy`.
 ///
