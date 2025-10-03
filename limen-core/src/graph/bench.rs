@@ -752,24 +752,35 @@ pub mod concurrent_graph {
 
     /// ===== std-only opaque owned-bundle used by GraphApi take/put =====
     pub enum TestPipelineStdOwnedBundle {
-        // node 0: out=[e0.out]
+        /// node 0: out=[e0.out]
         N0 {
+            /// The detached node link for node 0 (TestSourceNodeU32).
             node: NodeLink<TestSourceNodeU32, 0, 1, (), u32>,
+            /// Owned output endpoint for edge e0.out.
             out0: OutEpU32,
+            /// Static edge policy for out0 (e0).
             out0_policy: EdgePolicy,
         },
-        // node 1: in=[e0.in], out=[e1.out]
+        /// node 1: in=[e0.in], out=[e1.out]
         N1 {
+            /// The detached node link for node 1 (TestIdentityModelNodeU32).
             node: NodeLink<TestIdentityModelNodeU32, 1, 1, u32, u32>,
+            /// Owned input endpoint for edge e0.in.
             in0: InEpU32,
+            /// Owned output endpoint for edge e1.out.
             out1: OutEpU32,
+            /// Static edge policy for in0 (e0).
             in0_policy: EdgePolicy,
+            /// Static edge policy for out1 (e1).
             out1_policy: EdgePolicy,
         },
-        // node 2: in=[e1.in]
+        /// node 2: in=[e1.in]
         N2 {
+            /// The detached node link for node 2 (TestSinkNodeU32).
             node: NodeLink<TestSinkNodeU32, 1, 0, u32, ()>,
+            /// Owned input endpoint for edge e1.in.
             in1: InEpU32,
+            /// Static edge policy for in1 (e1).
             in1_policy: EdgePolicy,
         },
     }

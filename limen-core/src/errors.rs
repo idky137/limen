@@ -107,22 +107,27 @@ impl fmt::Display for NodeError {
 impl Error for NodeError {}
 
 impl NodeError {
+    /// Creates a `NoInput` error.
     #[inline]
     pub const fn no_input() -> Self {
         Self::new(NodeErrorKind::NoInput, 0)
     }
+    /// Creates a `Backpressured` error.
     #[inline]
     pub const fn backpressured() -> Self {
         Self::new(NodeErrorKind::Backpressured, 0)
     }
+    /// Creates an `OverBudget` error.
     #[inline]
     pub const fn over_budget() -> Self {
         Self::new(NodeErrorKind::OverBudget, 0)
     }
+    /// Creates an `ExternalUnavailable` error.
     #[inline]
     pub const fn external_unavailable() -> Self {
         Self::new(NodeErrorKind::ExternalUnavailable, 0)
     }
+    /// Creates an `ExecutionFailed` error.
     #[inline]
     pub const fn execution_failed() -> Self {
         Self::new(NodeErrorKind::ExecutionFailed, 0)
@@ -350,7 +355,9 @@ impl Error for OutputError {}
 /// Error surface for runtimes: can wrap graph- and node-level errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeError {
+    /// Graph errors
     Graph(GraphError),
+    /// Node errors
     Node(NodeError),
 }
 

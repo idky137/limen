@@ -193,12 +193,33 @@ pub trait GraphNodeOwnedEndpointHandoff<const I: usize, const IN: usize, const O
 
 /// Unified runtime-facing graph API.
 ///
-/// Minimal surface shared by all runtimes (P0, P1, P2, P2Concurrent).
+/// Exposes the minimal surface shared by all runtimes (P0, P1, P2, P2Concurrent).
+/// The `NODE_COUNT` and `EDGE_COUNT` const generics define the compile-time
+/// sizes for node and edge descriptor arrays and occupancy snapshots.
 pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     // ----- Descriptors & validation -----
+
+    /// Returns the static descriptors for all nodes in the graph.
+    ///
+    /// The returned array length must equal `NODE_COUNT` and be consistent with
+    /// the edge descriptors exposed by [`get_edge_descriptors`](Self::get_edge_descriptors).
     fn get_node_descriptors(&self) -> [NodeDescriptor; NODE_COUNT];
+
+    /// Returns the static descriptors for all edges in the graph.
+    ///
+    /// The returned array length must equal `EDGE_COUNT` and reference only valid
+    /// node indices described by [`get_node_descriptors`](Self::get_node_descriptors).
     fn get_edge_descriptors(&self) -> [EdgeDescriptor; EDGE_COUNT];
 
+    /// Validates the graph topology and policies derived from node and edge descriptors.
+    ///
+    /// This checks index bounds, arities, endpoint compatibility, and any static
+    /// policy invariants enforced by `GraphDescBuf::validate`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphError`] if the descriptors are inconsistent or violate
+    /// graph-level constraints.
     #[inline]
     fn validate_graph(&self) -> Result<(), GraphError> {
         GraphDescBuf {
@@ -209,19 +230,75 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     }
 
     // ----- Occupancy snapshot helpers -----
+
+    /// Returns a one-shot occupancy snapshot for edge `E`.
+    ///
+    /// Useful for lightweight telemetry or scheduling decisions that only need
+    /// the latest observed queue depth for a specific edge.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `E` — The compile-time edge index in `0..EDGE_COUNT`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphError`] if `E` is out of range or the occupancy cannot
+    /// be sampled.
     fn edge_occupancy_for<const E: usize>(&self) -> Result<QueueOccupancy, GraphError>;
 
+    /// Writes occupancy snapshots for **all** edges into `out`.
+    ///
+    /// This is the most efficient way to bulk-refresh edge depths for schedulers
+    /// or exporters that need a full graph view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphError`] if any edge occupancy cannot be sampled.
     fn write_all_edge_occupancies(
         &self,
         out: &mut [QueueOccupancy; EDGE_COUNT],
     ) -> Result<(), GraphError>;
 
+    /// Refreshes occupancies only for edges incident to node `I`.
+    ///
+    /// This selectively updates `out` entries corresponding to the `IN` inputs
+    /// and `OUT` outputs of node `I`, leaving all other entries unchanged.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `I` — The compile-time node index in `0..NODE_COUNT`.
+    /// * `IN` — The node’s input arity.
+    /// * `OUT` — The node’s output arity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphError`] if `I` is out of range or the related edge
+    /// occupancies cannot be sampled.
     fn refresh_occupancies_for_node<const I: usize, const IN: usize, const OUT: usize>(
         &self,
         out: &mut [QueueOccupancy; EDGE_COUNT],
     ) -> Result<(), GraphError>;
 
     // ----- Generic step-by-index (for P0/P1) -----
+
+    /// Drives a single scheduling step for the node at `index`.
+    ///
+    /// Runtimes P0/P1 use this to advance nodes generically over an abstract
+    /// clock and telemetry sink without requiring node-specific types.
+    ///
+    /// # Parameters
+    ///
+    /// * `index` — The dynamic node index to step.
+    /// * `clock` — A clock-like source used by the node during execution.
+    /// * `telemetry` — A sink for emitting per-step metrics or traces.
+    ///
+    /// # Returns
+    ///
+    /// A [`StepResult`] indicating whether work was performed or the node is idle.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`NodeError`] if the node fails to execute its step.
     fn step_node_by_index<C, T>(
         &mut self,
         index: usize,
@@ -232,6 +309,17 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
         EdgePolicy: Copy;
 
     // ----- Optional: static node policy read -----
+
+    /// Returns the static [`NodePolicy`] for node `I` (compile-time index).
+    ///
+    /// This queries the node type directly, without requiring an instance step,
+    /// and is useful for planning or verifying scheduling constraints.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `I` — The compile-time node index in `0..NODE_COUNT`.
+    /// * `IN` — The node’s input arity.
+    /// * `OUT` — The node’s output arity.
     fn node_policy_for<const I: usize, const IN: usize, const OUT: usize>(&self) -> NodePolicy
     where
         Self: GraphNodeAccess<I> + GraphNodeTypes<I, IN, OUT>,
@@ -251,19 +339,56 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     }
 
     // ===== std-only: by-index owned handoff for worker threads =====
+
+    /// Opaque, owned bundle containing a node and its owned endpoints for
+    /// transfer to worker threads.
     #[cfg(feature = "std")]
     type OwnedBundle: Send + 'static;
 
-    /// Move node `index` + owned endpoints out of the graph (opaque bundle).
+    /// Moves the node at `index` and its owned endpoints out of the graph.
+    ///
+    /// The returned bundle can be executed off-thread and later reattached via
+    /// [`put_owned_bundle_by_index`](Self::put_owned_bundle_by_index).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphError`] if `index` is invalid, the node is already
+    /// detached, or ownership cannot be transferred.
     #[cfg(feature = "std")]
     fn take_owned_bundle_by_index(&mut self, index: usize)
         -> Result<Self::OwnedBundle, GraphError>;
 
-    /// Reattach a previously taken node bundle back into the graph.
+    /// Reattaches a previously taken owned bundle back into the graph.
+    ///
+    /// After reattachment, the node is once again managed by the graph and can
+    /// be stepped by index or handed off again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphError`] if the bundle does not match the target graph
+    /// slot or the slot is already occupied.
     #[cfg(feature = "std")]
     fn put_owned_bundle_by_index(&mut self, bundle: Self::OwnedBundle) -> Result<(), GraphError>;
 
-    /// Drive one step on an owned bundle (generic over clock/telemetry).
+    /// Executes a single step on an owned bundle outside the graph.
+    ///
+    /// This is the worker-thread counterpart to
+    /// [`step_node_by_index`](Self::step_node_by_index), operating directly on
+    /// the detached bundle.
+    ///
+    /// # Parameters
+    ///
+    /// * `bundle` — The detached node bundle to execute.
+    /// * `clock` — A clock-like source used by the node during execution.
+    /// * `telemetry` — A sink for emitting per-step metrics or traces.
+    ///
+    /// # Returns
+    ///
+    /// A [`StepResult`] indicating the outcome of the step.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`NodeError`] if the node’s step fails.
     #[cfg(feature = "std")]
     fn step_owned_bundle<C, T>(
         bundle: &mut Self::OwnedBundle,

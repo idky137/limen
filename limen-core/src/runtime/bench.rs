@@ -152,10 +152,18 @@ where
     }
 }
 
-// ===== std test runtime: one worker thread per node =====
+impl<const NODE_COUNT: usize, const EDGE_COUNT: usize> Default
+    for TestNoStdRuntime<NODE_COUNT, EDGE_COUNT>
+{
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// ===== std test runtime: one worker thread per node =====
 #[cfg(feature = "std")]
 pub mod concurrent_runtime {
-    use super::*;
     use crate::errors::{GraphError, NodeErrorKind, RuntimeError};
     use crate::graph::GraphApi;
     use crate::node::StepResult;
@@ -185,6 +193,7 @@ pub mod concurrent_runtime {
     }
 
     impl<const NODE_COUNT: usize, const EDGE_COUNT: usize> TestStdRuntime<NODE_COUNT, EDGE_COUNT> {
+        /// Construct with a pessimistic initial occupancy; `init()` will overwrite it.
         pub fn new() -> Self {
             use crate::policy::WatermarkState;
             let init_occ = QueueOccupancy {
@@ -416,6 +425,15 @@ pub mod concurrent_runtime {
 
             // No node made progress this round.
             Ok(false)
+        }
+    }
+
+    impl<const NODE_COUNT: usize, const EDGE_COUNT: usize> Default
+        for TestStdRuntime<NODE_COUNT, EDGE_COUNT>
+    {
+        #[inline]
+        fn default() -> Self {
+            Self::new()
         }
     }
 }

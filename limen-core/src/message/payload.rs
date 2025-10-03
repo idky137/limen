@@ -18,6 +18,7 @@ impl Payload for [u8] {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> Payload for &'a [u8] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
@@ -38,6 +39,7 @@ impl<const N: usize> Payload for [u8; N] {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, const N: usize> Payload for &'a [u8; N] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
@@ -58,6 +60,7 @@ impl Payload for u32 {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> Payload for &'a u32 {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
@@ -78,6 +81,7 @@ impl Payload for [u32] {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> Payload for &'a [u32] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
@@ -98,6 +102,7 @@ impl<const N: usize> Payload for [u32; N] {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, const N: usize> Payload for &'a [u32; N] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {

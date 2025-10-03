@@ -13,6 +13,7 @@ pub enum MemoryClass {
     Shared,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for MemoryClass {
     fn default() -> Self {
         // default: regular host memory
