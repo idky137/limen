@@ -75,7 +75,7 @@ impl Payload for [u32] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         BufferDescriptor {
-            bytes: self.len() * core::mem::size_of::<u32>(),
+            bytes: core::mem::size_of_val(self),
             class: MemoryClass::Host,
         }
     }
@@ -86,7 +86,7 @@ impl<'a> Payload for &'a [u32] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         BufferDescriptor {
-            bytes: self.len() * core::mem::size_of::<u32>(),
+            bytes: core::mem::size_of_val(*self),
             class: MemoryClass::Host,
         }
     }

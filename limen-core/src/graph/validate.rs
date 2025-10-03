@@ -5,10 +5,11 @@ use crate::errors::GraphError;
 use crate::node::link::NodeDescriptor;
 use crate::node::NodeKind;
 
-#[cfg(not(feature = "std"))]
+// no_std + alloc: bring in the `vec!` macro only
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 extern crate alloc;
-#[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+#[cfg(all(feature = "alloc", not(feature = "std")))]
+use alloc::vec;
 
 /// An interface for descriptor validation (borrowed/owned/buffer).
 pub trait GraphValidator {

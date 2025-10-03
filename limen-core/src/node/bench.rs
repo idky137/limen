@@ -123,7 +123,11 @@ impl Node<0, 1, (), u32> for TestSourceNodeU32 {
             println!("--- [src::step] --- pushing message: {:?}", message);
         }
 
+        #[cfg(feature = "std")]
         let enqueue_result = ctx.out_try_push(0, message);
+
+        #[cfg(not(feature = "std"))]
+        let _ = ctx.out_try_push(0, message);
 
         #[cfg(feature = "std")]
         {
@@ -236,7 +240,11 @@ impl Node<1, 1, u32, u32> for TestIdentityModelNodeU32 {
             println!("--- [map::step] --- received on in0: {:?}", message);
         }
 
+        #[cfg(feature = "std")]
         let enqueue_result = ctx.out_try_push(0, message);
+
+        #[cfg(not(feature = "std"))]
+        let _ = ctx.out_try_push(0, message);
 
         #[cfg(feature = "std")]
         {

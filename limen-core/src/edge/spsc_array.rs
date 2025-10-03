@@ -112,3 +112,9 @@ impl<P: Payload + Clone, const N: usize> Edge for StaticRing<Message<P>, N> {
         self.buf[self.head].as_ref().ok_or(QueueError::Empty)
     }
 }
+
+impl<T, const N: usize> Default for StaticRing<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
