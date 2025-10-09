@@ -35,7 +35,7 @@ use crate::{
         Node as _, StepContext, StepResult,
     },
     policy::EdgePolicy,
-    prelude::{EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink, Telemetry},
+    prelude::{EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink, PlatformClock, Telemetry},
     types::{EdgeIndex, NodeIndex, PortId, PortIndex},
 };
 
@@ -199,7 +199,8 @@ impl GraphApi<3, 2> for TestPipeline {
     ) -> Result<StepResult, NodeError>
     where
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         match index {
             0 => <Self as GraphNodeContextBuilder<0, 0, 1>>::with_node_and_step_context::<
@@ -368,7 +369,8 @@ impl GraphNodeContextBuilder<0, 0, 1> for TestPipeline {
     >
     where
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let out0_policy = self.edges.0.policy();
 
@@ -432,7 +434,8 @@ impl GraphNodeContextBuilder<0, 0, 1> for TestPipeline {
     where
         Self: GraphNodeAccess<0>,
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         // Disjoint borrows: nodes and edges are separate fields.
         let node = &mut self.nodes.0;
@@ -486,7 +489,8 @@ impl GraphNodeContextBuilder<1, 1, 1> for TestPipeline {
     >
     where
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let in0_policy = self.edges.0.policy();
         let out1_policy = self.edges.1.policy();
@@ -551,7 +555,8 @@ impl GraphNodeContextBuilder<1, 1, 1> for TestPipeline {
     where
         Self: GraphNodeAccess<1>,
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let node = &mut self.nodes.1;
 
@@ -605,7 +610,8 @@ impl GraphNodeContextBuilder<2, 1, 0> for TestPipeline {
     >
     where
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let in1_policy = self.edges.1.policy();
 
@@ -669,7 +675,8 @@ impl GraphNodeContextBuilder<2, 1, 0> for TestPipeline {
     where
         Self: GraphNodeAccess<2>,
         EdgePolicy: Copy,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let node = &mut self.nodes.2;
 
@@ -945,7 +952,8 @@ pub mod concurrent_graph {
         ) -> Result<StepResult, NodeError>
         where
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             match index {
                 0 => <Self as GraphNodeContextBuilder<0, 0, 1>>::with_node_and_step_context::<
@@ -1055,7 +1063,8 @@ pub mod concurrent_graph {
         ) -> Result<StepResult, NodeError>
         where
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             match bundle {
                 TestPipelineStdOwnedBundle::N0 {
@@ -1257,7 +1266,8 @@ pub mod concurrent_graph {
         >
         where
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             let out0_policy = self.edges.0.policy();
 
@@ -1310,7 +1320,8 @@ pub mod concurrent_graph {
         where
             Self: GraphNodeAccess<0>,
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             let node = self.nodes.0.as_mut().expect("node 0 moved");
             let out0_policy = self.edges.0.policy();
@@ -1363,7 +1374,8 @@ pub mod concurrent_graph {
         >
         where
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             let in0_policy = self.edges.0.policy();
             let out1_policy = self.edges.1.policy();
@@ -1418,7 +1430,8 @@ pub mod concurrent_graph {
         where
             Self: GraphNodeAccess<1>,
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             let node = self.nodes.1.as_mut().expect("node 1 moved");
             let in0_policy = self.edges.0.policy();
@@ -1473,7 +1486,8 @@ pub mod concurrent_graph {
         >
         where
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             let in1_policy = self.edges.1.policy();
 
@@ -1526,7 +1540,8 @@ pub mod concurrent_graph {
         where
             Self: GraphNodeAccess<2>,
             EdgePolicy: Copy,
-            T: Telemetry,
+            C: PlatformClock + Sized,
+            T: Telemetry + Sized,
         {
             let node = self.nodes.2.as_mut().expect("node 2 moved");
             let in1_policy = self.edges.1.policy();

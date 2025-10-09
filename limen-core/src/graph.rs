@@ -10,7 +10,7 @@
 
 use crate::node::Node;
 
-use crate::prelude::Telemetry;
+use crate::prelude::{PlatformClock, Telemetry};
 use crate::{
     edge::{link::EdgeDescriptor, Edge, EdgeOccupancy},
     errors::{GraphError, NodeError},
@@ -124,7 +124,8 @@ pub trait GraphNodeContextBuilder<const I: usize, const IN: usize, const OUT: us
     >
     where
         EdgePolicy: Copy,
-        T: Telemetry;
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized;
 
     /// Borrowed handoff: in one `&mut self` borrow, lend both
     /// `&mut node(I)` and a fully wired `StepContext` to a closure.
@@ -153,7 +154,8 @@ pub trait GraphNodeContextBuilder<const I: usize, const IN: usize, const OUT: us
     where
         Self: GraphNodeAccess<I>,
         EdgePolicy: Copy,
-        T: Telemetry;
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized;
 }
 
 /// Std-only: move `node I` and owned endpoint queues to a worker thread.
@@ -316,7 +318,8 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     ) -> Result<StepResult, NodeError>
     where
         EdgePolicy: Copy,
-        T: Telemetry;
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized;
 
     // ----- Optional: static node policy read -----
 
@@ -407,7 +410,35 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     ) -> Result<StepResult, NodeError>
     where
         EdgePolicy: Copy,
-        T: Telemetry;
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized;
 }
 
+/// Opaque, runtime-owned buffer of edge occupancy snapshots.
+///
+/// # Semantics
+/// - This buffer is **owned by the runtime** and passed by mutable reference to
+///   graph APIs that *write into it* (see [`GraphApi::write_all_edge_occupancies`]
+///   and [`GraphApi::refresh_occupancies_for_node`]).
+/// - Each entry is a point-in-time [`EdgeOccupancy`] snapshot for the edge at the
+///   same index as returned by `GraphApi::get_edge_descriptors()`.
+/// - **Writers must not re-order** entries. Writers may update some or all slots,
+///   but any slot not explicitly written must be left untouched.
+///
+/// # Contracts
+/// - `GraphApi::write_all_edge_occupancies(&mut EdgeOccupancyBuf<E>)` **must write**
+///   a fresh value for **every** slot `[0..E)`.
+/// - `GraphApi::refresh_occupancies_for_node<I, IN, OUT>(&mut EdgeOccupancyBuf<E>)`
+///   is a **partial refresh**: it **must only** update slots corresponding to edges
+///   that are upstream or downstream of node `I` and **must not** modify any other
+///   slots.
+///
+/// # Usage
+/// - Runtimes typically allocate one `EdgeOccupancyBuf<E>` and reuse it across
+///   sampling intervals. After a full write, they may call partial refreshes to keep
+///   entries warm for the currently stepped node without touching unrelated edges.
+/// - Consumers should treat the contents as **snapshots** only; values may change
+///   immediately after sampling due to concurrent producers/consumers.
+///
+/// See also: [`EdgeOccupancy`], [`GraphApi`].
 pub type EdgeOccupancyBuf<const E: usize> = [EdgeOccupancy; E];

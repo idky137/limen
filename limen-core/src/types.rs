@@ -16,6 +16,22 @@ pub struct SequenceNumber(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ticks(pub u64);
 
+impl Ticks {
+    /// Wrapping (modular) subtraction. Computes `self - rhs`,
+    /// wrapping around at the boundary of the type.
+    #[inline]
+    pub const fn wrapping_sub(self, rhs: Ticks) -> Ticks {
+        Ticks(self.0.wrapping_sub(rhs.0))
+    }
+
+    /// Wrapping (modular) addition. Computes `self + rhs`,
+    /// wrapping around at the boundary of the type.
+    #[inline]
+    pub const fn wrapping_add(self, rhs: Ticks) -> Ticks {
+        Ticks(self.0.wrapping_add(rhs.0))
+    }
+}
+
 /// Absolute deadline in nanoseconds since platform boot (or epoch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeadlineNs(pub u64);

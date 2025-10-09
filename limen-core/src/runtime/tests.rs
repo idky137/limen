@@ -6,6 +6,7 @@ use crate::memory::PlacementAcceptance;
 use crate::message::{Message, MessageFlags};
 use crate::node::NodeCapabilities;
 use crate::policy::{BatchingPolicy, BudgetPolicy, DeadlinePolicy, NodePolicy, WatermarkState};
+use crate::prelude::{NoopClock, NoopTelemetry};
 use crate::runtime::LimenRuntime;
 use crate::types::{QoSClass, SequenceNumber, Ticks, TraceId};
 
@@ -116,10 +117,10 @@ fn core_pipeline_runs_with_nostd_runtime() {
     let mut graph = TestPipeline::new(src, map, snk, q0, q1);
 
     // runtime
-    let mut runtime: TestNoStdRuntime<3, 2> = TestNoStdRuntime::new();
+    let mut runtime: TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 2> = TestNoStdRuntime::new();
 
     // init (no_std runtime doesn't move anything)
-    runtime.init(&mut graph, (), ()).unwrap();
+    runtime.init(&mut graph, NoopClock, NoopTelemetry).unwrap();
 
     // quick validation + snapshot
     graph.validate_graph().unwrap();
@@ -135,7 +136,7 @@ fn core_pipeline_runs_with_nostd_runtime() {
         #[cfg(feature = "std")]
         println!(
             "--- [graph_occupancies] --- {:?}",
-            <TestNoStdRuntime<3, 2> as crate::runtime::LimenRuntime<
+            <TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 2> as crate::runtime::LimenRuntime<
                 crate::graph::bench::TestPipeline,
                 3,
                 2,
@@ -145,11 +146,13 @@ fn core_pipeline_runs_with_nostd_runtime() {
 
     // still valid
     graph.validate_graph().unwrap();
-    assert!(!<TestNoStdRuntime<3, 2> as LimenRuntime<
-        crate::graph::bench::TestPipeline,
-        3,
-        2,
-    >>::is_stopping(&runtime));
+    assert!(
+        !<TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 2> as LimenRuntime<
+            crate::graph::bench::TestPipeline,
+            3,
+            2,
+        >>::is_stopping(&runtime)
+    );
 }
 
 // ----------------------------------------------------------------------
@@ -240,10 +243,10 @@ fn std_pipeline_runs_with_std_runtime() {
     let mut graph = TestPipelineStd::new(src, map, snk, q0, q1);
 
     // runtime
-    let mut runtime: TestStdRuntime<3, 2> = TestStdRuntime::new();
+    let mut runtime: TestStdRuntime<NoopClock, NoopTelemetry, 3, 2> = TestStdRuntime::new();
 
     // init (moves bundles to worker threads)
-    runtime.init(&mut graph, (), ()).unwrap();
+    runtime.init(&mut graph, NoopClock, NoopTelemetry).unwrap();
 
     // graph remains valid (descriptors intact)
     graph.validate_graph().unwrap();
@@ -254,7 +257,7 @@ fn std_pipeline_runs_with_std_runtime() {
         #[cfg(feature = "std")]
         println!(
             "--- [graph_occupancies] --- {:?}",
-            <TestStdRuntime<3, 2> as crate::runtime::LimenRuntime<
+            <TestStdRuntime<NoopClock, NoopTelemetry, 3, 2> as crate::runtime::LimenRuntime<
                 crate::graph::bench::TestPipeline,
                 3,
                 2,
@@ -263,7 +266,7 @@ fn std_pipeline_runs_with_std_runtime() {
     }
 
     // request stop and run one final step to reattach bundles
-    <crate::runtime::bench::concurrent_runtime::TestStdRuntime<3, 2> as LimenRuntime<
+    <crate::runtime::bench::concurrent_runtime::TestStdRuntime<NoopClock, NoopTelemetry,3, 2> as LimenRuntime<
         crate::graph::bench::concurrent_graph::TestPipelineStd,
         3,
         2,

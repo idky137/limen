@@ -98,7 +98,7 @@ pub enum TelemetryKind {
 }
 
 /// A no-op telemetry implementation, useful for P0.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct NoopTelemetry;
 
 impl Telemetry for NoopTelemetry {

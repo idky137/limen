@@ -11,7 +11,7 @@ use crate::errors::{NodeError, QueueError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{EdgePolicy, NodePolicy};
-use crate::prelude::{TelemetryKey, TelemetryKind};
+use crate::prelude::{PlatformClock, TelemetryKey, TelemetryKind};
 use crate::telemetry::Telemetry;
 use crate::types::Ticks;
 
@@ -97,6 +97,8 @@ pub struct StepContext<
 > where
     InP: Payload,
     OutP: Payload,
+    C: PlatformClock + Sized,
+    T: Telemetry + Sized,
 {
     /// Arrays of inbound queues by input port index.
     inputs: [&'graph mut InQ; IN],
@@ -105,7 +107,7 @@ pub struct StepContext<
     /// Edge policies for each input.
     in_policies: [EdgePolicy; IN],
     /// Edge policies for each output.
-    pub out_policies: [EdgePolicy; OUT],
+    out_policies: [EdgePolicy; OUT],
 
     /// Node identifier for automatic telemetry stamping.
     node_id: u32,
@@ -115,9 +117,9 @@ pub struct StepContext<
     out_edge_ids: [u32; OUT],
 
     /// Platform clock or timer services.
-    pub clock: &'clock C,
+    clock: &'clock C,
     /// Telemetry sink for counters/histograms.
-    pub telemetry: &'telemetry mut T,
+    telemetry: &'telemetry mut T,
     /// Phantom type markers to keep payload types visible to the compiler.
     _marker: core::marker::PhantomData<(InP, OutP)>,
 }
@@ -127,6 +129,8 @@ impl<'graph, 'telemetry, 'clock, const IN: usize, const OUT: usize, InP, OutP, I
 where
     InP: Payload,
     OutP: Payload,
+    C: PlatformClock + Sized,
+    T: Telemetry + Sized,
 {
     /// Create a new step context from queues, policies, and services.
     #[allow(clippy::too_many_arguments)]
@@ -163,7 +167,8 @@ where
     OutP: Payload,
     InQ: Edge<Item = Message<InP>>,
     OutQ: Edge<Item = Message<OutP>>,
-    T: Telemetry,
+    C: PlatformClock + Sized,
+    T: Telemetry + Sized,
 {
     /// Attempt to pop an item from the specified input queue.
     #[inline]
@@ -206,6 +211,13 @@ where
         occ
     }
 
+    /// Return the policy of the specified input queue.
+    #[inline]
+    pub fn in_policy(&mut self, i: usize) -> EdgePolicy {
+        debug_assert!(i < IN);
+        self.in_policies[i]
+    }
+
     /// Attempt to push an item to the specified output queue.
     #[inline]
     pub fn out_try_push(&mut self, o: usize, m: Message<OutP>) -> crate::edge::EnqueueResult {
@@ -246,6 +258,44 @@ where
             occ.items as u64,
         );
         occ
+    }
+
+    /// Return the policy of the specified input queue.
+    #[inline]
+    pub fn out_policy(&mut self, i: usize) -> EdgePolicy {
+        debug_assert!(i < IN);
+        self.out_policies[i]
+    }
+
+    #[inline]
+    pub fn clock(&self) -> &C {
+        self.clock
+    }
+
+    #[inline]
+    pub fn telemetry_mut(&mut self) -> &mut T {
+        self.telemetry
+    }
+
+    #[inline]
+    pub fn now_ticks(&self) -> Ticks {
+        self.clock.now_ticks()
+    }
+
+    /// Absolute or relative nanoseconds per the clock’s definition.
+    #[inline]
+    pub fn now_nanos(&self) -> u64 {
+        self.clock.ticks_to_nanos(self.clock.now_ticks())
+    }
+
+    #[inline]
+    pub fn ticks_to_nanos(&self, t: Ticks) -> u64 {
+        self.clock.ticks_to_nanos(t)
+    }
+
+    #[inline]
+    pub fn nanos_to_ticks(&self, ns: u64) -> Ticks {
+        self.clock.nanos_to_ticks(ns)
     }
 }
 
@@ -298,7 +348,8 @@ where
     where
         InQ: Edge<Item = Message<InP>>,
         OutQ: Edge<Item = Message<OutP>>,
-        T: Telemetry;
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized;
 
     /// Handle watchdog timeouts by applying over-budget policy (degrade/default/skip).
     fn on_watchdog_timeout<C, T>(

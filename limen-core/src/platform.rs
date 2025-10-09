@@ -1,10 +1,24 @@
-//! Platform abstractions (clock, timers, affinities).
+//! Platform abstractions.
 //!
-//! Implementations are provided by `limen-platform` or the runtimes.
+//! ## Boundary: what enters `StepContext`
+//! Only a **monotonic clock** enters `StepContext`. Nodes may **observe** time,
+//! but **do not** control scheduling (sleep/yield) or placement (affinity) via the
+//! context. This preserves portability, `no_std` viability, determinism in tests,
+//! and keeps scheduling policy in the runtime.
+//!
+//! ## Runtime-level aides (do **not** enter `StepContext`)
+//! - [`Timers`]: sleeping/yielding belongs to the runtime/scheduler.
+//! - [`Affinity`]: core/NUMA placement is a runtime concern.
+//!
+//! Implementations of these traits are provided by `limen-platform` or host runtimes.
 
 use crate::types::Ticks;
 
 /// A monotonic platform clock.
+///
+/// The epoch is implementation-defined; monotonicity is required.
+/// Conversions allow runtimes to expose a fast tick domain and still
+/// provide nanosecond correlation for telemetry and tracing.
 pub trait PlatformClock {
     /// Return the current monotonic tick count.
     fn now_ticks(&self) -> Ticks;
@@ -16,7 +30,48 @@ pub trait PlatformClock {
     fn nanos_to_ticks(&self, ns: u64) -> Ticks;
 }
 
+/// A no-op telemetry implementation, useful for testing.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopClock;
+
+impl PlatformClock for NoopClock {
+    #[inline]
+    fn now_ticks(&self) -> Ticks {
+        Ticks(0)
+    }
+
+    #[inline]
+    fn ticks_to_nanos(&self, ticks: Ticks) -> u64 {
+        ticks.0
+    }
+
+    #[inline]
+    fn nanos_to_ticks(&self, ns: u64) -> Ticks {
+        Ticks(ns)
+    }
+}
+
+impl PlatformClock for () {
+    #[inline]
+    fn now_ticks(&self) -> Ticks {
+        Ticks(0)
+    }
+
+    #[inline]
+    fn ticks_to_nanos(&self, ticks: Ticks) -> u64 {
+        ticks.0
+    }
+
+    #[inline]
+    fn nanos_to_ticks(&self, ns: u64) -> Ticks {
+        Ticks(ns)
+    }
+}
+
 /// Optional timers service (P1/P2).
+///
+/// **Does not** enter `StepContext`. If a node requires timers, the host
+/// should inject a handle at construction time (out-of-band), not via the context.
 pub trait Timers {
     /// Sleep/yield until the given tick, if supported.
     fn sleep_until(&self, ticks: Ticks);
@@ -26,6 +81,9 @@ pub trait Timers {
 }
 
 /// Optional affinities/NUMA hints (P2).
+///
+/// **Does not** enter `StepContext`. Placement and topology hints are owned
+/// by the runtime/scheduler, not by nodes.
 pub trait Affinity {
     /// Pin the current worker to a logical core or group.
     fn pin_to_core(&self, core_id: u32);

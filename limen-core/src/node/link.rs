@@ -7,7 +7,7 @@ use crate::{
     message::{payload::Payload, Message},
     node::{Node, NodeCapabilities, NodeKind, StepContext, StepResult},
     policy::NodePolicy,
-    prelude::Telemetry,
+    prelude::{PlatformClock, Telemetry},
     types::{NodeIndex, PortId, PortIndex},
 };
 
@@ -193,7 +193,8 @@ where
     where
         InQ: Edge<Item = Message<InP>>,
         OutQ: Edge<Item = Message<OutP>>,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         self.node.step(ctx)
     }

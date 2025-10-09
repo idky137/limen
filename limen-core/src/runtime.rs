@@ -5,7 +5,11 @@ pub mod bench;
 #[cfg(test)]
 mod tests;
 
-use crate::{edge::EdgeOccupancy, graph::GraphApi};
+use crate::{
+    edge::EdgeOccupancy,
+    graph::GraphApi,
+    prelude::{PlatformClock, Telemetry},
+};
 
 /// A single, uniform runtime trait that all Limen runtimes (P0, P1, P2, P2Concurrent)
 /// can implement. The API is allocation- and threading-agnostic.
@@ -15,6 +19,8 @@ use crate::{edge::EdgeOccupancy, graph::GraphApi};
 pub trait LimenRuntime<Graph, const NODE_COUNT: usize, const EDGE_COUNT: usize>
 where
     Graph: GraphApi<NODE_COUNT, EDGE_COUNT>,
+    Self::Clock: PlatformClock + Sized,
+    Self::Telemetry: Telemetry + Sized,
 {
     /// Clock abstraction stored by the runtime. Use `()` if not needed.
     type Clock;

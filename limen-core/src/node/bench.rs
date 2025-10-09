@@ -114,7 +114,8 @@ impl Node<0, 1, (), u32> for TestSourceNodeU32 {
     where
         InQ: Edge<Item = Message<()>>,
         OutQ: Edge<Item = Message<u32>>,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let header = self.make_header();
         let message = Message::new(header, self.next_value_to_emit);
@@ -227,7 +228,8 @@ impl Node<1, 1, u32, u32> for TestIdentityModelNodeU32 {
     where
         InQ: Edge<Item = Message<u32>>,
         OutQ: Edge<Item = Message<u32>>,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let Ok(message) = ctx.in_try_pop(0) else {
             #[cfg(feature = "std")]
@@ -376,7 +378,8 @@ impl Node<1, 0, u32, ()> for TestSinkNodeU32 {
     where
         InQ: Edge<Item = Message<u32>>,
         OutQ: Edge<Item = Message<()>>,
-        T: Telemetry,
+        C: PlatformClock + Sized,
+        T: Telemetry + Sized,
     {
         let Ok(message) = ctx.in_try_pop(0) else {
             #[cfg(feature = "std")]
