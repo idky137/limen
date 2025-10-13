@@ -1,11 +1,10 @@
 //! (Work)bench [test] Runtime implementation.
 
 use crate::edge::EdgeOccupancy;
-use crate::errors::{NodeErrorKind, RuntimeError};
+use crate::errors::RuntimeError;
 use crate::graph::GraphApi;
 use crate::policy::WatermarkState;
-use crate::prelude::{NoopClock, NoopTelemetry, PlatformClock, Telemetry};
-use core::marker::PhantomData;
+use crate::prelude::{PlatformClock, Telemetry};
 
 use super::LimenRuntime;
 

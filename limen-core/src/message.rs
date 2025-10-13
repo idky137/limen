@@ -62,27 +62,37 @@ impl MessageFlags {
 
     // Typed helpers (readable call sites, avoid repeating bit constants).
 
+    /// Return a copy with `FIRST_IN_BATCH` set.
     #[inline]
     pub const fn first_in_batch(self) -> Self {
         self.with(Self::FIRST_IN_BATCH)
     }
+
+    /// Return a copy with `LAST_IN_BATCH` set.
     #[inline]
     pub const fn last_in_batch(self) -> Self {
         self.with(Self::LAST_IN_BATCH)
     }
+
+    /// Return a copy with `DEGRADE_ALLOWED` set.
     #[inline]
     pub const fn allow_degrade(self) -> Self {
         self.with(Self::DEGRADE_ALLOWED)
     }
 
+    /// `true` if `FIRST_IN_BATCH` is set.
     #[inline]
     pub const fn is_first(self) -> bool {
         self.contains(Self::FIRST_IN_BATCH)
     }
+
+    /// `true` if `LAST_IN_BATCH` is set.
     #[inline]
     pub const fn is_last(self) -> bool {
         self.contains(Self::LAST_IN_BATCH)
     }
+
+    /// `true` if `DEGRADE_ALLOWED` is set.
     #[inline]
     pub const fn can_degrade(self) -> bool {
         self.contains(Self::DEGRADE_ALLOWED)

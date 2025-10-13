@@ -267,32 +267,37 @@ where
         self.out_policies[i]
     }
 
+    /// Access the platform clock used for timing and conversions.
     #[inline]
     pub fn clock(&self) -> &C {
         self.clock
     }
 
+    /// Borrow the telemetry sink to emit custom counters/gauges/histograms.
     #[inline]
     pub fn telemetry_mut(&mut self) -> &mut T {
         self.telemetry
     }
 
+    /// Current monotonic tick value from the platform clock.
     #[inline]
     pub fn now_ticks(&self) -> Ticks {
         self.clock.now_ticks()
     }
 
-    /// Absolute or relative nanoseconds per the clock’s definition.
+    /// Current time in nanoseconds per the clock’s tick-to-ns mapping.
     #[inline]
     pub fn now_nanos(&self) -> u64 {
         self.clock.ticks_to_nanos(self.clock.now_ticks())
     }
 
+    /// Convert clock ticks to nanoseconds using the clock’s scale.
     #[inline]
     pub fn ticks_to_nanos(&self, t: Ticks) -> u64 {
         self.clock.ticks_to_nanos(t)
     }
 
+    /// Convert nanoseconds to clock ticks using the clock’s scale.
     #[inline]
     pub fn nanos_to_ticks(&self, ns: u64) -> Ticks {
         self.clock.nanos_to_ticks(ns)

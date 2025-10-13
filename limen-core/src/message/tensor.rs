@@ -273,6 +273,13 @@ impl<'a> TensorRef<'a> {
         }
     }
 
+    /// Change the logical shape **without** reallocating or moving data.
+    ///
+    /// - Updates only the metadata; the underlying buffer and `memory_class` stay the same.
+    /// - Consumes and returns `self` (builder-style).
+    /// - **Safety**: relies on a `debug_assert!` that the element count implied by
+    ///   `new_shape` matches the current data length. In release builds this is not
+    ///   checked; use only when you know the shape is correct.
     #[inline]
     pub fn reshape_unchecked(mut self, new_shape: &'a [usize]) -> Self {
         debug_assert!(
@@ -685,6 +692,12 @@ impl<'a> TensorRefMut<'a> {
         }
     }
 
+    /// Change the logical shape **in place** for a mutable tensor view.
+    ///
+    /// - Updates only the metadata; the backing storage and `memory_class` are unchanged.
+    /// - Consumes and returns `self` (builder-style).
+    /// - **Safety**: guarded by a `debug_assert!` that `new_shape` has the same total
+    ///   element count as the current data. No check runs in release builds.
     #[inline]
     pub fn reshape_unchecked(mut self, new_shape: &'a [usize]) -> Self {
         debug_assert!(
