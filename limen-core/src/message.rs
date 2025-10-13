@@ -12,6 +12,7 @@ use crate::message::payload::Payload;
 use crate::types::{DeadlineNs, QoSClass, SequenceNumber, Ticks, TraceId};
 
 /// A compact bitfield of message flags.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageFlags(u32);
 
@@ -24,24 +25,67 @@ impl MessageFlags {
     pub const DEGRADE_ALLOWED: u32 = 1 << 2;
 
     /// Create an empty flag set.
+    #[inline]
     pub const fn empty() -> Self {
         Self(0)
     }
 
-    /// Set a flag bit.
-    pub const fn with(mut self, bit: u32) -> Self {
-        self.0 |= bit;
-        self
-    }
-
-    /// Check whether a flag bit is set.
-    pub const fn contains(&self, bit: u32) -> bool {
-        (self.0 & bit) != 0
+    /// Construct from raw bits (advanced).
+    #[inline]
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
     }
 
     /// Return the raw flag bits.
-    pub const fn bits(&self) -> u32 {
+    #[inline]
+    pub const fn bits(self) -> u32 {
         self.0
+    }
+
+    /// Set a flag bit.
+    #[inline]
+    pub const fn with(self, bit: u32) -> Self {
+        Self(self.0 | bit)
+    }
+
+    /// Clear a flag bit.
+    #[inline]
+    pub const fn without(self, bit: u32) -> Self {
+        Self(self.0 & !bit)
+    }
+
+    /// Check whether a flag bit is set.
+    #[inline]
+    pub const fn contains(self, bit: u32) -> bool {
+        (self.0 & bit) != 0
+    }
+
+    // Typed helpers (readable call sites, avoid repeating bit constants).
+
+    #[inline]
+    pub const fn first_in_batch(self) -> Self {
+        self.with(Self::FIRST_IN_BATCH)
+    }
+    #[inline]
+    pub const fn last_in_batch(self) -> Self {
+        self.with(Self::LAST_IN_BATCH)
+    }
+    #[inline]
+    pub const fn allow_degrade(self) -> Self {
+        self.with(Self::DEGRADE_ALLOWED)
+    }
+
+    #[inline]
+    pub const fn is_first(self) -> bool {
+        self.contains(Self::FIRST_IN_BATCH)
+    }
+    #[inline]
+    pub const fn is_last(self) -> bool {
+        self.contains(Self::LAST_IN_BATCH)
+    }
+    #[inline]
+    pub const fn can_degrade(self) -> bool {
+        self.contains(Self::DEGRADE_ALLOWED)
     }
 }
 
@@ -90,16 +134,27 @@ impl MessageHeader {
             memory_class,
         }
     }
+
+    /// Update `payload_size_bytes` and `memory_class` from a payload descriptor.
+    #[inline]
+    pub fn sync_from_payload<P: Payload>(&mut self, payload: &P) {
+        let desc = payload.buffer_descriptor();
+        self.payload_size_bytes = desc.bytes;
+        self.memory_class = desc.class;
+    }
 }
 
 /// A message with a generic payload `P`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Message<P: Payload> {
     /// The header fields.
     pub header: MessageHeader,
     /// The payload object or view.
     pub payload: P,
 }
+
+// Copy only when the payload is Copy (e.g., TensorRef<'a>).
+impl<P> Copy for Message<P> where P: Payload + Copy {}
 
 impl<P: Payload> Message<P> {
     /// Construct a new message from a header and payload, fixing size and class.
@@ -108,6 +163,39 @@ impl<P: Payload> Message<P> {
         header.payload_size_bytes = desc.bytes;
         header.memory_class = desc.class;
         Self { header, payload }
+    }
+
+    /// Swap payloads while recalculating header fields.
+    #[inline]
+    pub fn with_payload<Q: Payload>(self, payload: Q) -> Message<Q> {
+        let mut header = self.header;
+        let desc = payload.buffer_descriptor();
+        header.payload_size_bytes = desc.bytes;
+        header.memory_class = desc.class;
+        Message { header, payload }
+    }
+
+    /// Transform payloads while preserving header metadata correctly.
+    #[inline]
+    pub fn map_payload<Q: Payload>(self, f: impl FnOnce(P) -> Q) -> Message<Q> {
+        // Move out of `self` explicitly.
+        let Message {
+            mut header,
+            payload,
+        } = self;
+
+        // Produce the new payload by consuming the old one.
+        let new_payload = f(payload);
+
+        // Recompute size and placement from the new payload.
+        let desc = new_payload.buffer_descriptor();
+        header.payload_size_bytes = desc.bytes;
+        header.memory_class = desc.class;
+
+        Message {
+            header,
+            payload: new_payload,
+        }
     }
 }
 
@@ -140,5 +228,54 @@ impl<'a, P: Payload> Batch<'a, P> {
             .iter()
             .map(|m| m.header.payload_size_bytes)
             .sum()
+    }
+
+    /// Iterate over messages.
+    #[inline]
+    pub fn iter(&self) -> core::slice::Iter<'_, Message<P>> {
+        self.messages.iter()
+    }
+
+    /// Convenience: is the first message marked FIRST_IN_BATCH (if present)?
+    #[inline]
+    pub fn first_flagged(&self) -> bool {
+        self.messages
+            .first()
+            .map(|m| m.header.flags.is_first())
+            .unwrap_or(false)
+    }
+
+    /// Convenience: is the last message marked LAST_IN_BATCH (if present)?
+    #[inline]
+    pub fn last_flagged(&self) -> bool {
+        self.messages
+            .last()
+            .map(|m| m.header.flags.is_last())
+            .unwrap_or(false)
+    }
+
+    /// (Optional) Validate flags are consistent with batch boundaries.
+    /// Enable only when you want assertions (e.g., in tests) via a feature flag.
+    // #[cfg(feature = "validate_batches")]
+    #[inline]
+    pub fn assert_flags_consistent(&self) {
+        if self.is_empty() {
+            return;
+        }
+        debug_assert!(
+            self.first_flagged(),
+            "batch: first item missing FIRST_IN_BATCH"
+        );
+        debug_assert!(
+            self.last_flagged(),
+            "batch: last item missing LAST_IN_BATCH"
+        );
+        // Optional: internal items should have neither FIRST nor LAST
+        for m in &self.messages[1..self.messages.len().saturating_sub(1)] {
+            debug_assert!(
+                !m.header.flags.is_first() && !m.header.flags.is_last(),
+                "batch: internal item has boundary flag"
+            );
+        }
     }
 }

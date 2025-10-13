@@ -134,7 +134,18 @@ impl<'a> TensorRef<'a> {
     /// This is the primary, safe constructor. It does not allocate.
     #[inline]
     pub fn new(elems: TensorElements<'a>, shape: &'a [usize], memory_class: MemoryClass) -> Self {
-        debug_assert!(Self::checked_element_count(shape) == Some(elems.len_elems()));
+        // Debug-only: catch overflow and mismatched shapes early.
+        debug_assert!(
+            match Self::checked_element_count(shape) {
+                Some(expected) => expected == elems.len_elems(),
+                None => false, // overflow
+            },
+            "TensorRef::new: shape elements ({}) != data elements ({})",
+            // These expressions are only evaluated in debug builds:
+            Self::checked_element_count(shape).unwrap_or(usize::MAX),
+            elems.len_elems()
+        );
+
         Self {
             elems,
             shape,
@@ -260,6 +271,18 @@ impl<'a> TensorRef<'a> {
             Some(n) => n == self.len_elems(),
             None => false,
         }
+    }
+
+    #[inline]
+    pub fn reshape_unchecked(mut self, new_shape: &'a [usize]) -> Self {
+        debug_assert!(
+            Self::checked_element_count(new_shape) == Some(self.len_elems()),
+            "TensorRef::reshape_unchecked: shape elements ({}) != data elements ({})",
+            Self::checked_element_count(new_shape).unwrap_or(usize::MAX),
+            self.len_elems()
+        );
+        self.shape = new_shape;
+        self
     }
 
     // ---- Typed accessors (no casts, fully safe) ----------------------------
@@ -395,6 +418,7 @@ impl<'a> TensorRef<'a> {
 impl<'a> Payload for TensorRef<'a> {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
+        debug_assert!(self.is_compatible(), "TensorRef: incompatible shape/data");
         BufferDescriptor {
             bytes: self.byte_len(),
             class: self.memory_class,
@@ -520,7 +544,17 @@ impl<'a> TensorRefMut<'a> {
         shape: &'a [usize],
         memory_class: MemoryClass,
     ) -> Self {
-        debug_assert!(Self::checked_element_count(shape) == Some(elems.len_elems()));
+        // Debug-only: catch overflow and mismatched shapes early.
+        debug_assert!(
+            match Self::checked_element_count(shape) {
+                Some(expected) => expected == elems.len_elems(),
+                None => false, // overflow
+            },
+            "TensorRefMut::new: shape elements ({}) != data elements ({})",
+            // Only evaluated in debug:
+            Self::checked_element_count(shape).unwrap_or(usize::MAX),
+            elems.len_elems()
+        );
         Self {
             elems,
             shape,
@@ -649,6 +683,18 @@ impl<'a> TensorRefMut<'a> {
             Some(n) => n == self.len_elems(),
             None => false,
         }
+    }
+
+    #[inline]
+    pub fn reshape_unchecked(mut self, new_shape: &'a [usize]) -> Self {
+        debug_assert!(
+            Self::checked_element_count(new_shape) == Some(self.len_elems()),
+            "TensorRefMut::reshape_unchecked: shape elements ({}) != data elements ({})",
+            Self::checked_element_count(new_shape).unwrap_or(usize::MAX),
+            self.len_elems()
+        );
+        self.shape = new_shape;
+        self
     }
 
     // ---- Typed mutable accessors (no casts, fully safe) --------------------
@@ -781,9 +827,39 @@ impl<'a> TensorRefMut<'a> {
     }
 }
 
+impl<'a> TensorRefMut<'a> {
+    /// Convert an exclusive mutable view into an immutable view (no copy).
+    #[inline]
+    pub fn into_immutable(self) -> TensorRef<'a> {
+        use crate::message::tensor::{TensorElements, TensorElementsMut};
+
+        let elems = match self.elems {
+            TensorElementsMut::Boolean(s) => TensorElements::Boolean(s),
+            TensorElementsMut::Unsigned8(s) => TensorElements::Unsigned8(s),
+            TensorElementsMut::Unsigned16(s) => TensorElements::Unsigned16(s),
+            TensorElementsMut::Unsigned32(s) => TensorElements::Unsigned32(s),
+            TensorElementsMut::Unsigned64(s) => TensorElements::Unsigned64(s),
+            TensorElementsMut::Signed8(s) => TensorElements::Signed8(s),
+            TensorElementsMut::Signed16(s) => TensorElements::Signed16(s),
+            TensorElementsMut::Signed32(s) => TensorElements::Signed32(s),
+            TensorElementsMut::Signed64(s) => TensorElements::Signed64(s),
+            TensorElementsMut::Float16(s) => TensorElements::Float16(s),
+            TensorElementsMut::BFloat16(s) => TensorElements::BFloat16(s),
+            TensorElementsMut::Float32(s) => TensorElements::Float32(s),
+            TensorElementsMut::Float64(s) => TensorElements::Float64(s),
+        };
+
+        TensorRef::new(elems, self.shape, self.memory_class)
+    }
+}
+
 impl<'a> Payload for TensorRefMut<'a> {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
+        debug_assert!(
+            self.is_compatible(),
+            "TensorRefMut: incompatible shape/data"
+        );
         BufferDescriptor {
             bytes: self.byte_len(),
             class: self.memory_class,

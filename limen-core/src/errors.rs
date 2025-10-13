@@ -22,6 +22,8 @@ pub enum QueueError {
     Backpressured,
     /// The queue is empty when a pop operation was requested.
     Empty,
+    /// The operation is not supported by this queue/backend (e.g., reference peek in concurrent mode).
+    Unsupported,
     /// The queue lock has been poisoned (concurrent mode only).
     Poisoned,
 }
@@ -36,6 +38,7 @@ impl fmt::Display for QueueError {
                 f.write_str("queue is backpressured but not full; caller may retry later")
             }
             QueueError::Empty => f.write_str("queue is empty"),
+            QueueError::Unsupported => f.write_str("operation unsupported by this queue/backend"),
             QueueError::Poisoned => f.write_str("queue lock is poisoned"),
         }
     }

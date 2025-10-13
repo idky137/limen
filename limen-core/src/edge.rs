@@ -51,7 +51,7 @@ pub struct EdgeOccupancy {
 /// but the trait is generic and can be used for other types as needed.
 pub trait Edge {
     /// The type of items stored in the queue.
-    type Item: Clone;
+    type Item;
 
     /// Attempt to push an item onto the queue using the given edge policy.
     ///
@@ -78,13 +78,29 @@ pub trait Edge {
     /// will override this to be non-destructive.
     fn try_peek(&self) -> Result<&Self::Item, QueueError>;
 
-    /// std-only helper: clone the front item without removing it.
+    /// std-only helper: copy the front item without removing it (cheap for `Copy`).
     ///
     /// Default implementation calls `try_peek()` and clones the result.
     /// Concurrent implementations that cannot return `&Item` across lock
     /// guards should override this to avoid returning `Unsupported`.
     #[cfg(feature = "std")]
-    fn try_peek_cloned(&self) -> Result<Self::Item, QueueError> {
+    fn try_peek_copied(&self) -> Result<Self::Item, QueueError>
+    where
+        Self::Item: Copy,
+    {
+        self.try_peek().copied()
+    }
+
+    /// std-only helper: clone the front item without removing it (heavier than copy).
+    ///
+    /// Default implementation calls `try_peek()` and clones the result.
+    /// Concurrent implementations that cannot return `&Item` across lock
+    /// guards should override this to avoid returning `Unsupported`.
+    #[cfg(feature = "std")]
+    fn try_peek_cloned(&self) -> Result<Self::Item, QueueError>
+    where
+        Self::Item: Clone,
+    {
         self.try_peek().cloned()
     }
 }
@@ -125,7 +141,7 @@ pub fn enqueue_with_admission<P: Payload, Q: Edge<Item = Message<P>>>(
 ///   [`WatermarkState::AtOrAboveHard`] (fully saturated, disallowing admission).
 pub struct NoQueue<P: Payload>(core::marker::PhantomData<P>);
 
-impl<P: Payload + Clone> Edge for NoQueue<P> {
+impl<P: Payload> Edge for NoQueue<P> {
     type Item = Message<P>;
     #[inline]
     fn try_push(&mut self, _item: Self::Item, _policy: &EdgePolicy) -> EnqueueResult {

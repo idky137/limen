@@ -1,6 +1,7 @@
-//! TODO:
+//! Minimal, zero-cost payload descriptors for generic Rust data.
 
 use crate::memory::{BufferDescriptor, MemoryClass};
+use core::mem;
 
 /// Trait for payload types that can provide byte length and memory class.
 pub trait Payload {
@@ -8,43 +9,58 @@ pub trait Payload {
     fn buffer_descriptor(&self) -> BufferDescriptor;
 }
 
-impl Payload for [u8] {
+/* ---------- Generic slices & arrays (cover all element types T) ---------- */
+
+#[allow(clippy::manual_slice_size_calculation)]
+impl<T> Payload for [T] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         BufferDescriptor {
-            bytes: self.len(),
+            bytes: self.len() * mem::size_of::<T>(),
+            class: MemoryClass::Host,
+        }
+    }
+}
+
+#[allow(clippy::needless_lifetimes, clippy::manual_slice_size_calculation)]
+impl<'a, T> Payload for &'a [T] {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        BufferDescriptor {
+            bytes: self.len() * mem::size_of::<T>(),
+            class: MemoryClass::Host,
+        }
+    }
+}
+
+impl<T, const N: usize> Payload for [T; N] {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        BufferDescriptor {
+            bytes: N * mem::size_of::<T>(),
             class: MemoryClass::Host,
         }
     }
 }
 
 #[allow(clippy::needless_lifetimes)]
-impl<'a> Payload for &'a [u8] {
+impl<'a, T, const N: usize> Payload for &'a [T; N] {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         BufferDescriptor {
-            bytes: self.len(),
+            bytes: N * mem::size_of::<T>(),
             class: MemoryClass::Host,
         }
     }
 }
 
-impl<const N: usize> Payload for [u8; N] {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: N,
-            class: MemoryClass::Host,
-        }
-    }
-}
+/* ------------------------- Common scalar payloads ------------------------ */
 
-#[allow(clippy::needless_lifetimes)]
-impl<'a, const N: usize> Payload for &'a [u8; N] {
+impl Payload for () {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         BufferDescriptor {
-            bytes: N,
+            bytes: 0,
             class: MemoryClass::Host,
         }
     }
@@ -54,70 +70,7 @@ impl Payload for u32 {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         BufferDescriptor {
-            bytes: core::mem::size_of::<u32>(),
-            class: MemoryClass::Host,
-        }
-    }
-}
-
-#[allow(clippy::needless_lifetimes)]
-impl<'a> Payload for &'a u32 {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: core::mem::size_of::<u32>(),
-            class: MemoryClass::Host,
-        }
-    }
-}
-
-impl Payload for [u32] {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: core::mem::size_of_val(self),
-            class: MemoryClass::Host,
-        }
-    }
-}
-
-#[allow(clippy::needless_lifetimes)]
-impl<'a> Payload for &'a [u32] {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: core::mem::size_of_val(*self),
-            class: MemoryClass::Host,
-        }
-    }
-}
-
-impl<const N: usize> Payload for [u32; N] {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: N * core::mem::size_of::<u32>(),
-            class: MemoryClass::Host,
-        }
-    }
-}
-
-#[allow(clippy::needless_lifetimes)]
-impl<'a, const N: usize> Payload for &'a [u32; N] {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: N * core::mem::size_of::<u32>(),
-            class: MemoryClass::Host,
-        }
-    }
-}
-
-impl Payload for () {
-    #[inline]
-    fn buffer_descriptor(&self) -> BufferDescriptor {
-        BufferDescriptor {
-            bytes: 0,
+            bytes: mem::size_of::<u32>(),
             class: MemoryClass::Host,
         }
     }
