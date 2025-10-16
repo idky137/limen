@@ -8,7 +8,6 @@ members = [
     "limen-sensors",
     "limen-output",
     "limen-platform",
-    "limen-devtools",
     "limen-examples",
 ]
 

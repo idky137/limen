@@ -1,9 +1,8 @@
-//! Compute backend and model traits.
+//! Compute backend and model traits (dyn-free, explicit; no defaults).
 //!
-//! These traits allow `limen-models` to compose existing inference engines
-//! (Tract, TFLite, ORT, vendor DSP) **without** dynamic dispatch in the hot path.
-//! Adapters are monomorphized by generics and hidden behind feature gates in
-//! the `limen-models` crate.
+//! Backends implement `ComputeBackend<InP, OutP>` and return a concrete `Model`
+//! that implements `ComputeModel<InP, OutP>`. The hot path is `infer_one`,
+//! which performs exactly one synchronous inference step for a single input.
 
 use crate::errors::InferenceError;
 use crate::memory::MemoryClass;
@@ -33,19 +32,57 @@ pub struct ModelMetadata {
     pub max_output_bytes: Option<usize>,
 }
 
-/// A loaded model that can be executed synchronously or via streams.
+/// A loaded model that performs **one synchronous inference step** at a time.
+///
+/// All methods are **required** (no defaults).
 pub trait ComputeModel<InP: Payload, OutP: Payload> {
-    /// Execute the model synchronously: `out` becomes the model output for `inp`.
-    fn run(&mut self, inp: &InP, out: &mut OutP) -> Result<(), InferenceError>;
+    /// Prepare internal state (e.g., allocate work buffers, plan kernels).
+    fn init(&mut self) -> Result<(), InferenceError>;
 
-    /// Return model metadata.
+    /// Perform exactly one inference step for `inp` and **return** the output payload.
+    ///
+    /// Returning `OutP` (rather than writing into `&mut OutP`) avoids requiring
+    /// the caller to construct output payloads. Backends can return an owned
+    /// payload or a view type they manage safely.
+    fn infer_one(&mut self, inp: &InP) -> Result<OutP, InferenceError>;
+
+    /// Ensure all outstanding device work is complete (if any).
+    fn drain(&mut self) -> Result<(), InferenceError>;
+
+    /// Reset internal state to a known baseline (drop caches, etc.).
+    fn reset(&mut self) -> Result<(), InferenceError>;
+
+    /// Return model metadata (I/O placement preferences, limits).
     fn metadata(&self) -> ModelMetadata;
 }
 
-/// An engine that can load/construct models and provide memory hooks.
-pub trait ComputeBackend {
-    /// Return the backend capabilities.
+/// An engine that can construct models and report capabilities (dyn-free).
+///
+/// Generic over payload types; loader uses a borrowed, backend-chosen descriptor.
+pub trait ComputeBackend<InP: Payload, OutP: Payload> {
+    /// Concrete model type (no trait objects).
+    type Model: ComputeModel<InP, OutP>;
+
+    /// Backend-specific error.
+    type Error;
+
+    /// Backend-specific descriptor used to load a model.
+    ///
+    /// Examples:
+    /// - on `std`:    `type ModelDescriptor<'desc> = &'desc ModelArtifact;`
+    /// - on `no_std`: `type ModelDescriptor<'desc> = &'desc [u8];`
+    type ModelDescriptor<'desc>
+    where
+        Self: 'desc;
+
+    /// Return capabilities of this backend (device streams, max batch, dtypes).
     fn capabilities(&self) -> BackendCapabilities;
+
+    /// Load a model from the descriptor (one-time, dyn-free).
+    fn load_model<'desc>(
+        &self,
+        desc: Self::ModelDescriptor<'desc>,
+    ) -> Result<Self::Model, Self::Error>;
 }
 
 /// A simple artifact passed to backends for model creation (POC-friendly).
@@ -61,11 +98,16 @@ pub struct ModelArtifact {
 #[cfg(feature = "std")]
 impl ModelArtifact {
     /// Construct from raw bytes.
-    // TODO: FIX!
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self {
             bytes: std::sync::Arc::new(bytes),
             label: None,
         }
+    }
+
+    /// Convenience: load from a file path.
+    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Ok(Self::from_bytes(bytes))
     }
 }

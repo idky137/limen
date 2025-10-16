@@ -7,13 +7,8 @@ description = "Processing nodes (normalize, window, threshold, classify, debounc
 repository = "https://example.com/limen"
 
 [features]
-default = []
-alloc = []
+alloc = ["limen-core/alloc"]
 std = ["alloc", "limen-core/std"]
 
 [dependencies]
-limen-core = { path = "../limen-core" }
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+limen-core = { path = "../limen-core", default-features = false }

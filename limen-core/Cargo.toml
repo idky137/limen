@@ -4,19 +4,13 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Limen core contracts and primitives for a graph-driven edge inference runtime (no_std by default)."
-repository = "https://example.com/limen" # replace with real repo
-categories = ["embedded", "no-std", "science", "computer-vision"]
-keywords = ["edge-ai", "inference", "no_std", "runtime", "graph"]
+repository = "https://example.com/limen" # TODO!
 
 [features]
 default = []
 alloc = []
 std = ["alloc", "ringbuf"]
 spsc_raw   = ["std"]                # enables SpscAtomicRing (unsafe)
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 ringbuf = { version = "0.4.8", optional = true }

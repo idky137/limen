@@ -1,10 +1,7 @@
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
+#![deny(unsafe_code)]
 //! Output SinkNodes for Limen.
-//!
-//! - [`stdout::StdoutSink`]: prints payloads with a configurable prefix.
-//! - [`file::FileSink`]: appends payloads to a file (std).
 
-#[cfg(feature = "std")]
-pub mod file;
-pub mod stdout;
+#[cfg(feature = "alloc")]
+extern crate alloc;

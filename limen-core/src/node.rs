@@ -263,7 +263,7 @@ where
     /// Return the policy of the specified input queue.
     #[inline]
     pub fn out_policy(&mut self, i: usize) -> EdgePolicy {
-        debug_assert!(i < IN);
+        debug_assert!(i < OUT);
         self.out_policies[i]
     }
 

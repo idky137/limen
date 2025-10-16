@@ -1,5 +1,4 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
 //! # limen-core

@@ -1,7 +1,9 @@
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
+#![deny(unsafe_code)]
 //! Platform adapters for Limen.
-//!
-//! Initial module provides a Linux/desktop `StdClock` compatible with `limen-core`.
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 pub mod linux;

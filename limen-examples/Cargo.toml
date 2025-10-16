@@ -6,16 +6,10 @@ license = "MIT OR Apache-2.0"
 description = "End-to-end examples for Limen (P2 simple chain PoC)."
 repository = "https://example.com/limen"
 
-[dependencies]
-limen-core = { path = "../limen-core", features = ["std"] }
-limen-light = { path = "../limen-light", default-features = false, features = ["p1"] }
-limen = { path = "../limen", default-features = true }
-limen-processing = { path = "../limen-processing", default-features = true }
-limen-models = { path = "../limen-models", default-features = true }
-limen-sensors = { path = "../limen-sensors", default-features = true }
-limen-output = { path = "../limen-output", default-features = true }
-limen-platform = { path = "../limen-platform", default-features = true }
+[features]
+alloc = ["limen-core/alloc"]
+std = ["alloc", "limen-core/std"]
 
-[[bin]]
-name = "p2_sim_chain"
-path = "src/p2_sim_chain.rs"
+[dependencies]
+limen-core = { path = "../limen-core", default-features = false }
+

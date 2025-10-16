@@ -7,13 +7,9 @@ description = "Compute backends and model nodes for Limen (identity and Tract PO
 repository = "https://example.com/limen"
 
 [features]
-default = ["std"]
-std = ["limen-core/std"]
-backend-tract = [] # POC feature, no deps wired yet (documentation to expand)
+alloc = ["limen-core/alloc"]
+std = ["alloc", "limen-core/std"]
 
 [dependencies]
-limen-core = { path = "../limen-core" }
+limen-core = { path = "../limen-core", default-features = false }
 
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]

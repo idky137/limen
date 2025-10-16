@@ -5,18 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "P2 runtime (std) for Limen: EDF and throughput schedulers, lock-free SPSC queues, and platform adapters."
 repository = "https://example.com/limen" # replace with real repo
-categories = ["science", "computer-vision", "concurrency"]
-keywords = ["edge-ai", "runtime", "scheduler", "edf"]
 
 [features]
-default = ["latency_edf", "throughput"]
-latency_edf = []
-throughput = []
-priority_lanes = []
 
 [dependencies]
 limen-core = { path = "../limen-core", features = ["std"] }
 
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]

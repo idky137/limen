@@ -7,12 +7,8 @@ description = "Platform adapters for Limen (initial: Linux/desktop)."
 repository = "https://example.com/limen"
 
 [features]
-default = ["std"]
-std = ["limen-core/std"]
+alloc = ["limen-core/alloc"]
+std = ["alloc", "limen-core/std"]
 
 [dependencies]
-limen-core = { path = "../limen-core" }
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+limen-core = { path = "../limen-core", default-features = false }
