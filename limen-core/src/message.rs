@@ -145,12 +145,40 @@ impl MessageHeader {
         }
     }
 
+    /// A zero/identity header (safe for scratch use).
+    #[inline]
+    pub const fn empty() -> Self {
+        Self {
+            trace_id: TraceId(0),
+            sequence: SequenceNumber(0),
+            creation_tick: Ticks(0),
+            deadline_ns: None,
+            qos: QoSClass::BestEffort,
+            payload_size_bytes: 0,
+            flags: MessageFlags::empty(),
+            memory_class: MemoryClass::Host,
+        }
+    }
+
+    /// Returns true is the message header is empty.
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self == Self::empty()
+    }
+
     /// Update `payload_size_bytes` and `memory_class` from a payload descriptor.
     #[inline]
     pub fn sync_from_payload<P: Payload>(&mut self, payload: &P) {
         let desc = payload.buffer_descriptor();
         self.payload_size_bytes = desc.bytes;
         self.memory_class = desc.class;
+    }
+}
+
+impl Default for MessageHeader {
+    #[inline]
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -206,6 +234,18 @@ impl<P: Payload> Message<P> {
             header,
             payload: new_payload,
         }
+    }
+
+    /// Borrow the payload.
+    #[inline]
+    pub fn payload_ref(&self) -> &P {
+        &self.payload
+    }
+
+    /// Decompose into `(header, payload)`.
+    #[inline]
+    pub fn into_parts(self) -> (MessageHeader, P) {
+        (self.header, self.payload)
     }
 }
 

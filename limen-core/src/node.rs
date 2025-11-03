@@ -5,6 +5,7 @@
 
 pub mod bench;
 pub mod link;
+pub mod model;
 
 use crate::edge::{Edge, EdgeOccupancy};
 use crate::errors::{NodeError, QueueError};
@@ -346,9 +347,9 @@ where
     /// per-edge policies and services. Implementations should honor the node
     /// policy (batching, budgets, deadlines) and return a `StepResult` to help
     /// the scheduler make progress decisions.
-    fn step<InQ, OutQ, C, T>(
+    fn step<'graph, 'telemetry, 'clock, InQ, OutQ, C, T>(
         &mut self,
-        ctx: &mut StepContext<IN, OUT, InP, OutP, InQ, OutQ, C, T>,
+        ctx: &mut StepContext<'graph, 'telemetry, 'clock, IN, OUT, InP, OutP, InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
         InQ: Edge<Item = Message<InP>>,
@@ -363,6 +364,7 @@ where
         _telemetry: &mut T,
     ) -> Result<StepResult, NodeError>
     where
+        C: PlatformClock + Sized,
         T: Telemetry;
 
     /// Flush and release resources, if any. Default: no-op.

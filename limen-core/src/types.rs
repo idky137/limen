@@ -30,6 +30,18 @@ impl Ticks {
     pub const fn wrapping_add(self, rhs: Ticks) -> Ticks {
         Ticks(self.0.wrapping_add(rhs.0))
     }
+
+    /// Saturating addition. Computes `self + rhs`, saturating at `u64::MAX`.
+    #[inline]
+    pub const fn saturating_add(self, rhs: Ticks) -> Ticks {
+        Ticks(self.0.saturating_add(rhs.0))
+    }
+
+    /// Saturating subtraction. Computes `self - rhs`, saturating at `0`.
+    #[inline]
+    pub const fn saturating_sub(self, rhs: Ticks) -> Ticks {
+        Ticks(self.0.saturating_sub(rhs.0))
+    }
 }
 
 /// Absolute deadline in nanoseconds since platform boot (or epoch).

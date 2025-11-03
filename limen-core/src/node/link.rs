@@ -206,6 +206,7 @@ where
         telemetry: &mut T,
     ) -> Result<StepResult, NodeError>
     where
+        C: PlatformClock + Sized,
         T: Telemetry,
     {
         self.node.on_watchdog_timeout(clock, telemetry)

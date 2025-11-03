@@ -3,6 +3,10 @@
 //! Backends implement `ComputeBackend<InP, OutP>` and return a concrete `Model`
 //! that implements `ComputeModel<InP, OutP>`. The hot path is `infer_one`,
 //! which performs exactly one synchronous inference step for a single input.
+//!
+//! Backends are monomorphized by generics (no dynamic dispatch). The model API
+//! is intentionally decoupled from graph/queue details so nodes own batching,
+//! backpressure, and telemetry.
 
 use crate::errors::InferenceError;
 use crate::memory::MemoryClass;
@@ -32,21 +36,24 @@ pub struct ModelMetadata {
     pub max_output_bytes: Option<usize>,
 }
 
-/// A loaded model that performs **one synchronous inference step** at a time.
-///
-/// All methods are **required** (no defaults).
+/// A loaded model that can perform inference.
 pub trait ComputeModel<InP: Payload, OutP: Payload> {
-    /// Prepare internal state (e.g., allocate work buffers, plan kernels).
+    /// Prepare internal state (allocate work buffers, compile kernels, etc.).
     fn init(&mut self) -> Result<(), InferenceError>;
 
-    /// Perform exactly one inference step for `inp` and **return** the output payload.
-    ///
-    /// Returning `OutP` (rather than writing into `&mut OutP`) avoids requiring
-    /// the caller to construct output payloads. Backends can return an owned
-    /// payload or a view type they manage safely.
-    fn infer_one(&mut self, inp: &InP) -> Result<OutP, InferenceError>;
+    /// Single-item inference (1×1).
+    fn infer_one(&mut self, inp: &InP, out: &mut OutP) -> Result<(), InferenceError>;
 
-    /// Ensure all outstanding device work is complete (if any).
+    /// Optional: batched inference. Default loops `infer_one`.
+    #[inline]
+    fn infer_batch(&mut self, inps: &[InP], outs: &mut [OutP]) -> Result<(), InferenceError> {
+        for (i, o) in inps.iter().zip(outs.iter_mut()) {
+            self.infer_one(i, o)?;
+        }
+        Ok(())
+    }
+
+    /// Ensure outstanding device work is complete (if any).
     fn drain(&mut self) -> Result<(), InferenceError>;
 
     /// Reset internal state to a known baseline (drop caches, etc.).
@@ -56,9 +63,7 @@ pub trait ComputeModel<InP: Payload, OutP: Payload> {
     fn metadata(&self) -> ModelMetadata;
 }
 
-/// An engine that can construct models and report capabilities (dyn-free).
-///
-/// Generic over payload types; loader uses a borrowed, backend-chosen descriptor.
+/// A dyn-free engine that constructs models and reports capabilities.
 pub trait ComputeBackend<InP: Payload, OutP: Payload> {
     /// Concrete model type (no trait objects).
     type Model: ComputeModel<InP, OutP>;
@@ -66,7 +71,7 @@ pub trait ComputeBackend<InP: Payload, OutP: Payload> {
     /// Backend-specific error.
     type Error;
 
-    /// Backend-specific descriptor used to load a model.
+    /// Backend-chosen borrowed descriptor used to load a model.
     ///
     /// Examples:
     /// - on `std`:    `type ModelDescriptor<'desc> = &'desc ModelArtifact;`
@@ -75,10 +80,10 @@ pub trait ComputeBackend<InP: Payload, OutP: Payload> {
     where
         Self: 'desc;
 
-    /// Return capabilities of this backend (device streams, max batch, dtypes).
+    /// Capability report.
     fn capabilities(&self) -> BackendCapabilities;
 
-    /// Load a model from the descriptor (one-time, dyn-free).
+    /// Load a model from a descriptor.
     fn load_model<'desc>(
         &self,
         desc: Self::ModelDescriptor<'desc>,
