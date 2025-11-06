@@ -6,6 +6,7 @@
 pub mod bench;
 pub mod link;
 pub mod model;
+pub mod source;
 
 use crate::edge::{Edge, EdgeOccupancy};
 use crate::errors::{NodeError, QueueError};

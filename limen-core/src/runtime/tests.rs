@@ -1,13 +1,18 @@
 //! Tests for Core runtime.
 
 use crate::edge::EdgeOccupancy;
+use crate::graph::bench::TestPipeline;
 use crate::graph::GraphApi;
 use crate::memory::PlacementAcceptance;
 use crate::message::{Message, MessageFlags};
-use crate::node::bench::TestU32Backend;
+use crate::node::bench::{
+    TestCounterSourceU32_2, TestIdentityModelNodeU32_2, TestSinkNodeU32, TestU32Backend,
+};
+use crate::node::source::{Source as _, SourceNode};
 use crate::node::NodeCapabilities;
 use crate::policy::{BatchingPolicy, BudgetPolicy, DeadlinePolicy, NodePolicy, WatermarkState};
 use crate::prelude::{NoopClock, NoopTelemetry};
+use crate::runtime::bench::TestNoStdRuntime;
 use crate::runtime::LimenRuntime;
 use crate::types::{QoSClass, SequenceNumber, Ticks, TraceId};
 
@@ -15,19 +20,13 @@ use crate::types::{QoSClass, SequenceNumber, Ticks, TraceId};
 type Q32 = crate::edge::bench::TestSpscRingBuf<Message<u32>, 8>;
 
 const TEST_MAX_BATCH: usize = 32;
-type MapNode = crate::node::bench::TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
+type MapNode = TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
 
 // -------------------------------------------------------------
 // core (no_std) pipeline + no_std test runtime (single-threaded)
 // -------------------------------------------------------------
 #[test]
 fn core_pipeline_runs_with_nostd_runtime() {
-    use crate::graph::bench::TestPipeline;
-    use crate::node::bench::{TestSinkNodeU32, TestSourceNodeU32};
-    use crate::runtime::bench::TestNoStdRuntime;
-
-    // Put this right before you construct `snk` in each test:
-
     let printer: fn(&str) = {
         #[cfg(feature = "std")]
         {
@@ -43,52 +42,40 @@ fn core_pipeline_runs_with_nostd_runtime() {
         }
     };
 
-    // nodes
-    let src = TestSourceNodeU32::new(
-        0,
-        TraceId(0u64),
-        SequenceNumber(0u64),
-        Ticks(0u64),
-        None,
-        QoSClass::BestEffort,
-        MessageFlags::empty(),
-        NodeCapabilities::default(),
-        NodePolicy {
-            batching: BatchingPolicy {
-                fixed_n: None,
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
+    let node_policy = NodePolicy {
+        batching: BatchingPolicy {
+            fixed_n: None,
+            max_delta_t: None,
         },
-        [PlacementAcceptance::default()],
+        budget: BudgetPolicy {
+            tick_budget: None,
+            watchdog_ticks: None,
+        },
+        deadline: DeadlinePolicy {
+            require_absolute_deadline: false,
+            slack_tolerance_ns: None,
+            default_deadline_ns: None,
+        },
+    };
+
+    // nodes
+    let src_impl = TestCounterSourceU32_2::new(
+        0,                                // starting_value_inclusive
+        TraceId(0u64),                    // trace_id
+        SequenceNumber(0u64),             // starting_sequence
+        Ticks(0u64),                      // starting_tick
+        None,                             // deadline_ns
+        QoSClass::BestEffort,             // qos
+        MessageFlags::empty(),            // flags
+        NodeCapabilities::default(),      // node_capabilities
+        [PlacementAcceptance::default()], // output_placement_acceptance
     );
+    let src: SourceNode<TestCounterSourceU32_2, u32, 1> = src_impl.into_sourcenode(node_policy);
 
     let map = MapNode::new(
         TestU32Backend,
         (),
-        NodePolicy {
-            batching: BatchingPolicy {
-                fixed_n: None,
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
-        },
+        node_policy,
         NodeCapabilities::default(),
         [PlacementAcceptance::default()],
         [PlacementAcceptance::default()],
@@ -97,21 +84,7 @@ fn core_pipeline_runs_with_nostd_runtime() {
 
     let snk = TestSinkNodeU32::new(
         NodeCapabilities::default(),
-        NodePolicy {
-            batching: BatchingPolicy {
-                fixed_n: None,
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
-        },
+        node_policy,
         [PlacementAcceptance::default()],
         printer,
     );
@@ -124,18 +97,18 @@ fn core_pipeline_runs_with_nostd_runtime() {
     let mut graph = TestPipeline::new(src, map, snk, q0, q1);
 
     // runtime
-    let mut runtime: TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 2> = TestNoStdRuntime::new();
+    let mut runtime: TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 3> = TestNoStdRuntime::new();
 
     // init (no_std runtime doesn't move anything)
     runtime.init(&mut graph, NoopClock, NoopTelemetry).unwrap();
 
     // quick validation + snapshot
     graph.validate_graph().unwrap();
-    let mut occ: [EdgeOccupancy; 2] = [EdgeOccupancy {
+    let mut occ: [EdgeOccupancy; 3] = [EdgeOccupancy {
         items: 0,
         bytes: 0,
         watermark: WatermarkState::AtOrAboveHard,
-    }; 2];
+    }; 3];
     graph.write_all_edge_occupancies(&mut occ).unwrap();
 
     for _ in 0..10 {
@@ -143,10 +116,10 @@ fn core_pipeline_runs_with_nostd_runtime() {
         #[cfg(feature = "std")]
         println!(
             "--- [graph_occupancies] --- {:?}",
-            <TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 2> as crate::runtime::LimenRuntime<
+            <TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 3> as crate::runtime::LimenRuntime<
                 crate::graph::bench::TestPipeline,
                 3,
-                2,
+                3,
             >>::occupancies(&runtime)
         );
     }
@@ -154,10 +127,10 @@ fn core_pipeline_runs_with_nostd_runtime() {
     // still valid
     graph.validate_graph().unwrap();
     assert!(
-        !<TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 2> as LimenRuntime<
+        !<TestNoStdRuntime<NoopClock, NoopTelemetry, 3, 3> as LimenRuntime<
             crate::graph::bench::TestPipeline,
             3,
-            2,
+            3,
         >>::is_stopping(&runtime)
     );
 }
@@ -168,12 +141,29 @@ fn core_pipeline_runs_with_nostd_runtime() {
 #[cfg(feature = "std")]
 #[test]
 fn std_pipeline_runs_with_std_runtime() {
-    use crate::graph::bench::concurrent_graph::TestPipelineStd;
-    use crate::node::bench::{TestSinkNodeU32, TestSourceNodeU32};
-    use crate::runtime::bench::concurrent_runtime::TestStdRuntime;
+    use crate::{
+        graph::bench::concurrent_graph::TestPipelineStd,
+        runtime::bench::concurrent_runtime::TestStdRuntime,
+    };
+
+    let node_policy = NodePolicy {
+        batching: BatchingPolicy {
+            fixed_n: None,
+            max_delta_t: None,
+        },
+        budget: BudgetPolicy {
+            tick_budget: None,
+            watchdog_ticks: None,
+        },
+        deadline: DeadlinePolicy {
+            require_absolute_deadline: false,
+            slack_tolerance_ns: None,
+            default_deadline_ns: None,
+        },
+    };
 
     // nodes
-    let src = TestSourceNodeU32::new(
+    let src_impl = TestCounterSourceU32_2::new(
         0,
         TraceId(0u64),
         SequenceNumber(0u64),
@@ -182,23 +172,9 @@ fn std_pipeline_runs_with_std_runtime() {
         QoSClass::BestEffort,
         MessageFlags::empty(),
         NodeCapabilities::default(),
-        NodePolicy {
-            batching: BatchingPolicy {
-                fixed_n: None,
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
-        },
         [PlacementAcceptance::default()],
     );
+    let src: SourceNode<TestCounterSourceU32_2, u32, 1> = src_impl.into_sourcenode(node_policy);
 
     let map = MapNode::new(
         TestU32Backend,
@@ -253,7 +229,7 @@ fn std_pipeline_runs_with_std_runtime() {
     let mut graph = TestPipelineStd::new(src, map, snk, q0, q1);
 
     // runtime
-    let mut runtime: TestStdRuntime<NoopClock, NoopTelemetry, 3, 2> = TestStdRuntime::new();
+    let mut runtime: TestStdRuntime<NoopClock, NoopTelemetry, 3, 3> = TestStdRuntime::new();
 
     // init (moves bundles to worker threads)
     runtime.init(&mut graph, NoopClock, NoopTelemetry).unwrap();
@@ -267,19 +243,19 @@ fn std_pipeline_runs_with_std_runtime() {
         #[cfg(feature = "std")]
         println!(
             "--- [graph_occupancies] --- {:?}",
-            <TestStdRuntime<NoopClock, NoopTelemetry, 3, 2> as crate::runtime::LimenRuntime<
+            <TestStdRuntime<NoopClock, NoopTelemetry, 3, 3> as crate::runtime::LimenRuntime<
                 crate::graph::bench::TestPipeline,
                 3,
-                2,
+                3,
             >>::occupancies(&runtime)
         );
     }
 
     // request stop and run one final step to reattach bundles
-    <crate::runtime::bench::concurrent_runtime::TestStdRuntime<NoopClock, NoopTelemetry,3, 2> as LimenRuntime<
+    <crate::runtime::bench::concurrent_runtime::TestStdRuntime<NoopClock, NoopTelemetry,3, 3> as LimenRuntime<
         crate::graph::bench::concurrent_graph::TestPipelineStd,
         3,
-        2,
+        3,
     >>::request_stop(&mut runtime);
     let _ = runtime.step(&mut graph).unwrap();
 
@@ -288,11 +264,11 @@ fn std_pipeline_runs_with_std_runtime() {
 
     // final snapshot
     {
-        let mut occ: [EdgeOccupancy; 2] = [EdgeOccupancy {
+        let mut occ: [EdgeOccupancy; 3] = [EdgeOccupancy {
             items: 0,
             bytes: 0,
             watermark: WatermarkState::AtOrAboveHard,
-        }; 2];
+        }; 3];
         graph.write_all_edge_occupancies(&mut occ).unwrap();
     }
 }

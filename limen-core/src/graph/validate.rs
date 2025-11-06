@@ -3,6 +3,7 @@
 use crate::edge::link::EdgeDescriptor;
 use crate::errors::GraphError;
 use crate::node::link::NodeDescriptor;
+use crate::node::source::EXTERNAL_INGRESS_NODE;
 use crate::node::NodeKind;
 
 // no_std + alloc: bring in the `vec!` macro only
@@ -43,58 +44,100 @@ impl<const N: usize, const E: usize> GraphValidator for GraphDescBuf<N, E> {
     }
 }
 
-/// Validates graph ports. TODO: UPDATE.
+/// Validates graph ports, including any number of synthetic ingress "monitor edges".
+///
+/// A monitor edge is an `EdgeDescriptor` whose `upstream.node == EXTERNAL_INGRESS_NODE`.
+/// It *does not* consume a real input port on the downstream node and is only valid
+/// when the downstream node `kind == Source`. At most **one** monitor edge may target
+/// each individual Source node.
 pub fn validate_ports(
     nodes: &[NodeDescriptor],
     edges: &[EdgeDescriptor],
 ) -> Result<(), GraphError> {
     let n = nodes.len();
 
-    // (A) Node id ↔ index must match exactly (0..N)
+    // (A) Node id ↔ index must match exactly (0..N) and kind/arity constraints.
     for (i, nd) in nodes.iter().enumerate() {
         if nd.id.0 != i {
             return Err(GraphError::IncompatiblePorts);
         }
-        // Kind vs arity constraints (existing)
         match nd.kind {
             NodeKind::Source => {
-                if nd.in_ports != 0 {
+                if nd.in_ports != 0 || nd.out_ports < 1 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Sink => {
-                if nd.out_ports != 0 {
+                if nd.in_ports < 1 || nd.out_ports != 0 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Split => {
-                if nd.out_ports < 2 {
+                if nd.in_ports < 1 || nd.out_ports < 2 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Join => {
-                if nd.in_ports < 2 {
+                if nd.in_ports < 2 || nd.out_ports < 1 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
-            NodeKind::Process | NodeKind::Model | NodeKind::External => {}
+            NodeKind::Process | NodeKind::Model => {
+                if nd.in_ports < 1 || nd.out_ports < 1 {
+                    return Err(GraphError::IncompatiblePorts);
+                }
+            }
+            NodeKind::External => {
+                // No fixed arity constraints here.
+            }
         }
     }
 
-    // (B) Edge ids must match position (0..E), endpoints in range, port bounds
+    // (B) Edge ids, endpoints, and port bounds.
+    // Monitor edges (from EXTERNAL_INGRESS_NODE) are allowed to target any Source.
+    // They do not consume a real port, so we bypass downstream port checks for them.
     for (i, ed) in edges.iter().enumerate() {
         // strict id match
         if ed.id.0 != i {
             return Err(GraphError::IncompatiblePorts);
         }
 
-        let f = ed.upstream.node.0;
+        let is_monitor = ed.upstream.node == EXTERNAL_INGRESS_NODE;
         let t = ed.downstream.node.0;
+
+        if is_monitor {
+            // Downstream must be real and a Source.
+            if t >= n {
+                return Err(GraphError::IncompatiblePorts);
+            }
+            if nodes[t].kind != NodeKind::Source {
+                return Err(GraphError::IncompatiblePorts);
+            }
+
+            // Enforce "at most one monitor edge per Source node" via nested scan.
+            for (j, other) in edges.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                if other.upstream.node == EXTERNAL_INGRESS_NODE && other.downstream.node.0 == t {
+                    return Err(GraphError::IncompatiblePorts);
+                }
+            }
+
+            // No port-bound checks for monitor edges; they don't consume real ports.
+            continue;
+        }
+
+        // Regular edge: both endpoints must be real nodes in range.
+        let f = ed.upstream.node.0;
         if f >= n || t >= n {
             return Err(GraphError::IncompatiblePorts);
         }
+
         let nf = &nodes[f];
         let nt = &nodes[t];
+
+        // Regular port bounds.
         if ed.upstream.port.0 >= nf.out_ports as usize {
             return Err(GraphError::IncompatiblePorts);
         }
@@ -103,9 +146,16 @@ pub fn validate_ports(
         }
     }
 
-    // (C) Each (to_node, to_port) must be unique (existing)
+    // (C) Each (to_node, to_port) must be unique among REAL edges.
+    // Monitor edges are excluded because they do not occupy a real input port.
     for (i, ei) in edges.iter().enumerate() {
+        if ei.upstream.node == EXTERNAL_INGRESS_NODE {
+            continue; // skip monitors
+        }
         for ej in edges.iter().skip(i + 1) {
+            if ej.upstream.node == EXTERNAL_INGRESS_NODE {
+                continue; // skip monitors
+            }
             if ei.downstream.node.0 == ej.downstream.node.0
                 && ei.downstream.port.0 == ej.downstream.port.0
             {
@@ -120,6 +170,9 @@ pub fn validate_ports(
 /// Validate acyclicity without allocation using fixed-size arrays on the stack.
 ///
 /// This variant is intended for [`GraphDescBuf`] where `N` is known at compile-time.
+///
+/// Monitor edges are ignored for cycle detection (they have no real upstream node
+/// and cannot introduce a cycle).
 pub fn validate_acyclic_buf<const N: usize>(
     _nodes: &[NodeDescriptor; N],
     edges: &[EdgeDescriptor],
@@ -129,6 +182,9 @@ pub fn validate_acyclic_buf<const N: usize>(
 
     // Validate both ends and build indegree.
     for e in edges {
+        if e.upstream.node == EXTERNAL_INGRESS_NODE {
+            continue; // ignore monitor edge
+        }
         let u = e.upstream.node.0;
         let v = e.downstream.node.0;
         if u >= N || v >= N {
@@ -154,8 +210,12 @@ pub fn validate_acyclic_buf<const N: usize>(
         let u = stack[top];
         visited += 1;
 
-        for e in edges.iter().filter(|e| e.upstream.node.0 == u) {
-            let v = e.downstream.node.0; // v ∈ [0, N) due to earlier validation
+        // Decrement indegree of real outgoing edges from u.
+        for e in edges
+            .iter()
+            .filter(|e| e.upstream.node != EXTERNAL_INGRESS_NODE && e.upstream.node.0 == u)
+        {
+            let v = e.downstream.node.0;
             debug_assert!(v < N, "downstream index validated earlier");
             indeg[v] -= 1;
             if indeg[v] == 0 {
@@ -183,8 +243,11 @@ pub fn validate_acyclic_alloc(
     let n = nodes.len();
     let mut indeg = vec![0usize; n];
 
-    // Validate indices and build indegree.
+    // Validate indices and build indegree for real edges only.
     for e in edges {
+        if e.upstream.node == EXTERNAL_INGRESS_NODE {
+            continue;
+        }
         let u = e.upstream.node.0;
         let v = e.downstream.node.0;
         if u >= n || v >= n {
@@ -205,8 +268,11 @@ pub fn validate_acyclic_alloc(
     let mut visited = 0usize;
     while let Some(u) = stack.pop() {
         visited += 1;
-        for e in edges.iter().filter(|e| e.upstream.node.0 == u) {
-            let v = e.downstream.node.0; // v ∈ [0, n) due to earlier validation
+        for e in edges
+            .iter()
+            .filter(|e| e.upstream.node != EXTERNAL_INGRESS_NODE && e.upstream.node.0 == u)
+        {
+            let v = e.downstream.node.0;
             indeg[v] -= 1;
             if indeg[v] == 0 {
                 stack.push(v);

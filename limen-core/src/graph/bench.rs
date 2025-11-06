@@ -8,7 +8,7 @@
 //!     pub struct TestPipeline;
 //!
 //!     nodes {
-//!         0: { ty: TestSourceNodeU32, in_ports: 0, out_ports: 1, in_payload: (),  out_payload: u32, name: Some("src") },
+//!         0: { ty: TestCounterSourceU32, in_ports: 0, out_ports: 1, in_payload: (),  out_payload: u32, name: Some("src") },
 //!         1: { ty: TestIdentityModelNodeU32, in_ports: 1, out_ports: 1, in_payload: u32, out_payload: u32, name: Some("map") },
 //!         2: { ty: TestSinkNodeU32,   in_ports: 1, out_ports: 0, in_payload: u32, out_payload: (),  name: Some("snk") }
 //!     }
@@ -31,7 +31,8 @@ use crate::{
     errors::{GraphError, NodeError},
     graph::{GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes},
     node::{
-        bench::{TestIdentityModelNodeU32_2, TestSinkNodeU32, TestSourceNodeU32},
+        bench::{TestCounterSourceU32_2, TestIdentityModelNodeU32_2, TestSinkNodeU32},
+        source::{Source as _, SourceNode, EXTERNAL_INGRESS_NODE},
         Node as _, StepContext, StepResult,
     },
     policy::EdgePolicy,
@@ -39,11 +40,8 @@ use crate::{
     types::{EdgeIndex, NodeIndex, PortId, PortIndex},
 };
 
+// Test edge types.
 type Q32 = crate::edge::bench::TestSpscRingBuf<crate::message::Message<u32>, 8>;
-
-const TEST_MAX_BATCH: usize = 32;
-type MapNode = TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
-
 const Q_32_POLICY: EdgePolicy = EdgePolicy {
     caps: crate::policy::QueueCaps {
         max_items: 8,
@@ -55,12 +53,20 @@ const Q_32_POLICY: EdgePolicy = EdgePolicy {
     admission: crate::policy::AdmissionPolicy::DropOldest,
 };
 
+// Test source node types.
+type SrcNode = SourceNode<TestCounterSourceU32_2, u32, 1>;
+const INGRESS_POLICY: EdgePolicy = Q_32_POLICY;
+
+// Test model node types.
+const TEST_MAX_BATCH: usize = 32;
+type MapNode = TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
+
 /// concrete graph implementation used for testing.
 #[allow(clippy::complexity)]
 pub struct TestPipeline {
     /// Nodes held in the graph.
     nodes: (
-        NodeLink<TestSourceNodeU32, 0, 1, (), u32>,
+        NodeLink<SrcNode, 0, 1, (), u32>,
         NodeLink<MapNode, 1, 1, u32, u32>,
         NodeLink<TestSinkNodeU32, 1, 0, u32, ()>,
     ),
@@ -72,18 +78,14 @@ impl TestPipeline {
     /// Returns a TestPipeline graph given the nodes and edges.
     #[inline]
     pub fn new(
-        node_0: TestSourceNodeU32,
+        node_0: SrcNode,
         node_1: MapNode,
         node_2: TestSinkNodeU32,
         q_0: Q32,
         q_1: Q32,
     ) -> Self {
         let nodes = (
-            NodeLink::<TestSourceNodeU32, 0, 1, (), u32>::new(
-                node_0,
-                NodeIndex::from(0usize),
-                Some("src"),
-            ),
+            NodeLink::<SrcNode, 0, 1, (), u32>::new(node_0, NodeIndex::from(0usize), Some("src")),
             NodeLink::<MapNode, 1, 1, u32, u32>::new(node_1, NodeIndex::from(1usize), Some("map")),
             NodeLink::<TestSinkNodeU32, 1, 0, u32, ()>::new(
                 node_2,
@@ -95,7 +97,7 @@ impl TestPipeline {
         let edges = (
             EdgeLink::<Q32, u32>::new(
                 q_0,
-                EdgeIndex::from(0usize),
+                EdgeIndex::from(1usize),
                 PortId {
                     node: NodeIndex::from(0usize),
                     port: PortIndex(0usize),
@@ -109,7 +111,7 @@ impl TestPipeline {
             ),
             EdgeLink::<Q32, u32>::new(
                 q_1,
-                EdgeIndex::from(1usize),
+                EdgeIndex::from(2usize),
                 PortId {
                     node: NodeIndex::from(1usize),
                     port: PortIndex(0usize),
@@ -127,8 +129,8 @@ impl TestPipeline {
     }
 }
 
-// ===== GraphApi<3,2> =====
-impl GraphApi<3, 2> for TestPipeline {
+// ===== GraphApi<3,3> =====
+impl GraphApi<3, 3> for TestPipeline {
     #[inline]
     fn get_node_descriptors(&self) -> [NodeDescriptor; 3] {
         [
@@ -138,18 +140,37 @@ impl GraphApi<3, 2> for TestPipeline {
         ]
     }
     #[inline]
-    fn get_edge_descriptors(&self) -> [EdgeDescriptor; 2] {
-        [self.edges.0.descriptor(), self.edges.1.descriptor()]
+    fn get_edge_descriptors(&self) -> [EdgeDescriptor; 3] {
+        [
+            EdgeDescriptor {
+                id: EdgeIndex::from(0usize),
+                upstream: PortId {
+                    node: EXTERNAL_INGRESS_NODE,
+                    port: PortIndex(0usize),
+                },
+                downstream: PortId {
+                    node: NodeIndex::from(0usize),
+                    port: PortIndex(0usize),
+                },
+                name: Some("ingress0"),
+            },
+            self.edges.0.descriptor(),
+            self.edges.1.descriptor(),
+        ]
     }
 
     #[inline]
     fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError> {
         let occ = match E {
             0 => {
+                let src = self.nodes.0.node().source_ref();
+                src.ingress_occupancy(&INGRESS_POLICY)
+            }
+            1 => {
                 let e = &self.edges.0;
                 e.occupancy(&e.policy())
             }
-            1 => {
+            2 => {
                 let e = &self.edges.1;
                 e.occupancy(&e.policy())
             }
@@ -159,16 +180,17 @@ impl GraphApi<3, 2> for TestPipeline {
     }
 
     #[inline]
-    fn write_all_edge_occupancies(&self, out: &mut [EdgeOccupancy; 2]) -> Result<(), GraphError> {
+    fn write_all_edge_occupancies(&self, out: &mut [EdgeOccupancy; 3]) -> Result<(), GraphError> {
         out[0] = self.edge_occupancy_for::<0>()?;
         out[1] = self.edge_occupancy_for::<1>()?;
+        out[2] = self.edge_occupancy_for::<2>()?;
         Ok(())
     }
 
     #[inline]
     fn refresh_occupancies_for_node<const I: usize, const IN: usize, const OUT: usize>(
         &self,
-        out: &mut [EdgeOccupancy; 2],
+        out: &mut [EdgeOccupancy; 3],
     ) -> Result<(), GraphError> {
         let node_idx = NodeIndex::from(I);
         // Iterate *all* edges; update those where this node is upstream OR downstream.
@@ -181,6 +203,9 @@ impl GraphApi<3, 2> for TestPipeline {
                     }
                     1 => {
                         out[1] = self.edge_occupancy_for::<1>()?;
+                    }
+                    2 => {
+                        out[2] = self.edge_occupancy_for::<2>()?;
                     }
                     _ => return Err(GraphError::InvalidEdgeIndex),
                 }
@@ -265,7 +290,7 @@ impl GraphApi<3, 2> for TestPipeline {
 
 // ===== GraphNodeAccess<I> =====
 impl GraphNodeAccess<0> for TestPipeline {
-    type Node = NodeLink<TestSourceNodeU32, 0, 1, (), u32>;
+    type Node = NodeLink<SrcNode, 0, 1, (), u32>;
     #[inline]
     fn node_ref(&self) -> &Self::Node {
         &self.nodes.0
@@ -299,7 +324,7 @@ impl GraphNodeAccess<2> for TestPipeline {
 }
 
 // ===== GraphEdgeAccess<E> =====
-impl GraphEdgeAccess<0> for TestPipeline {
+impl GraphEdgeAccess<1> for TestPipeline {
     type Edge = EdgeLink<Q32, u32>;
     #[inline]
     fn edge_ref(&self) -> &Self::Edge {
@@ -310,7 +335,7 @@ impl GraphEdgeAccess<0> for TestPipeline {
         &mut self.edges.0
     }
 }
-impl GraphEdgeAccess<1> for TestPipeline {
+impl GraphEdgeAccess<2> for TestPipeline {
     type Edge = EdgeLink<Q32, u32>;
     #[inline]
     fn edge_ref(&self) -> &Self::Edge {
@@ -346,7 +371,7 @@ impl GraphNodeTypes<2, 1, 0> for TestPipeline {
 }
 
 // ===== GraphNodeContextBuilder<I, IN, OUT> =====
-// node 0: in=[], out=[0]
+// node 0: in=[], out=[edge id 1]
 impl GraphNodeContextBuilder<0, 0, 1> for TestPipeline {
     #[inline]
     fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
@@ -381,7 +406,7 @@ impl GraphNodeContextBuilder<0, 0, 1> for TestPipeline {
 
         let node_id: u32 = 0;
         let in_edge_ids: [u32; 0] = [/* empty */];
-        let out_edge_ids: [u32; 1] = [0];
+        let out_edge_ids: [u32; 1] = [1];
 
         StepContext::<
             'graph,
@@ -449,7 +474,7 @@ impl GraphNodeContextBuilder<0, 0, 1> for TestPipeline {
 
         let node_id: u32 = 0;
         let in_edge_ids: [u32; 0] = [/* empty */];
-        let out_edge_ids: [u32; 1] = [0];
+        let out_edge_ids: [u32; 1] = [1];
 
         let mut ctx = StepContext::new(
             inputs,
@@ -466,7 +491,7 @@ impl GraphNodeContextBuilder<0, 0, 1> for TestPipeline {
     }
 }
 
-// node 1: in=[0], out=[1]
+// node 1: in=[edge id 1], out=[edge id 2]
 impl GraphNodeContextBuilder<1, 1, 1> for TestPipeline {
     #[inline]
     fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
@@ -501,8 +526,8 @@ impl GraphNodeContextBuilder<1, 1, 1> for TestPipeline {
         let out_policies: [EdgePolicy; 1] = [out1_policy];
 
         let node_id: u32 = 1;
-        let in_edge_ids: [u32; 1] = [0];
-        let out_edge_ids: [u32; 1] = [1];
+        let in_edge_ids: [u32; 1] = [1];
+        let out_edge_ids: [u32; 1] = [2];
 
         StepContext::<
             'graph,
@@ -569,8 +594,8 @@ impl GraphNodeContextBuilder<1, 1, 1> for TestPipeline {
         let out_policies: [EdgePolicy; 1] = [out1_policy];
 
         let node_id: u32 = 1;
-        let in_edge_ids: [u32; 1] = [0];
-        let out_edge_ids: [u32; 1] = [1];
+        let in_edge_ids: [u32; 1] = [1];
+        let out_edge_ids: [u32; 1] = [2];
 
         let mut ctx = StepContext::new(
             inputs,
@@ -587,7 +612,7 @@ impl GraphNodeContextBuilder<1, 1, 1> for TestPipeline {
     }
 }
 
-// node 2: in=[1], out=[]
+// node 2: in=[edge id 2], out=[]
 impl GraphNodeContextBuilder<2, 1, 0> for TestPipeline {
     #[inline]
     fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
@@ -621,7 +646,7 @@ impl GraphNodeContextBuilder<2, 1, 0> for TestPipeline {
         let out_policies: [EdgePolicy; 0] = [/* empty */];
 
         let node_id: u32 = 2;
-        let in_edge_ids: [u32; 1] = [1];
+        let in_edge_ids: [u32; 1] = [2];
         let out_edge_ids: [u32; 0] = [/* empty */];
 
         StepContext::<
@@ -687,7 +712,7 @@ impl GraphNodeContextBuilder<2, 1, 0> for TestPipeline {
         let out_policies: [EdgePolicy; 0] = [/* empty */];
 
         let node_id: u32 = 2;
-        let in_edge_ids: [u32; 1] = [1];
+        let in_edge_ids: [u32; 1] = [2];
         let out_edge_ids: [u32; 0] = [/* empty */];
 
         let mut ctx = StepContext::new(
@@ -714,18 +739,23 @@ pub mod concurrent_graph {
         edge::{
             link::ConcurrentEdgeLink,
             spsc_concurrent::{ConcurrentQueue, ConsumerEndpoint, ProducerEndpoint},
-            NoQueue,
+            EdgeOccupancy, NoQueue,
         },
+        errors::{GraphError, NodeError},
         graph::{
             GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder,
             GraphNodeOwnedEndpointHandoff, GraphNodeTypes,
         },
         node::{
-            bench::{TestIdentityModelNodeU32_2, TestSinkNodeU32, TestSourceNodeU32},
-            StepContext,
+            bench::{TestCounterSourceU32_2, TestIdentityModelNodeU32_2, TestSinkNodeU32},
+            source::{
+                probe::{new_probe_edge_pair, ConcurrentIngressEdgeLink, SourceIngressUpdater},
+                SourceNode,
+            },
+            StepContext, StepResult,
         },
         policy::EdgePolicy,
-        prelude::{EdgeDescriptor, NodeDescriptor, NodeLink},
+        prelude::{EdgeDescriptor, NodeDescriptor, NodeLink, PlatformClock, Telemetry},
         types::{EdgeIndex, NodeIndex, PortId, PortIndex},
     };
 
@@ -733,7 +763,12 @@ pub mod concurrent_graph {
     type InEpU32 = ConsumerEndpoint<u32, ConcurrentQueue<Q32>>;
     type OutEpU32 = ProducerEndpoint<u32, ConcurrentQueue<Q32>>;
 
-    const TEST_MAX_BATCH: usize = super::TEST_MAX_BATCH;
+    // Test source node types.
+    type SrcNode = SourceNode<TestCounterSourceU32_2, u32, 1>;
+    const INGRESS_POLICY: EdgePolicy = Q_32_POLICY;
+
+    // Test model node types.
+    const TEST_MAX_BATCH: usize = 32;
     type MapNode = TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
 
     /// concrete graph implementation (std / concurrent).
@@ -741,7 +776,7 @@ pub mod concurrent_graph {
     pub struct TestPipelineStd {
         // Nodes. We keep them as Options to support "move-out" for owned handoff.
         nodes: (
-            Option<NodeLink<TestSourceNodeU32, 0, 1, (), u32>>,
+            Option<NodeLink<SrcNode, 0, 1, (), u32>>,
             Option<NodeLink<MapNode, 1, 1, u32, u32>>,
             Option<NodeLink<TestSinkNodeU32, 1, 0, u32, ()>>,
         ),
@@ -756,7 +791,11 @@ pub mod concurrent_graph {
             (InEpU32, OutEpU32), // e0: (to node1 in0, from node0 out0)
             (InEpU32, OutEpU32), // e1: (to node2 in0, from node1 out0)
         ),
-        // NEW: cache node descriptors so validation still works after nodes are moved out
+        // Synthetic ingress edge (id 0) backed by atomic probe.
+        ingress_edge: ConcurrentIngressEdgeLink<u32>,
+        // Updater to be moved to node 0's worker; kept as Option so we can take().
+        ingress_updater: Option<SourceIngressUpdater>,
+        // Cache node descriptors so validation still works after nodes are moved out
         node_descs: [NodeDescriptor; 3],
     }
 
@@ -764,7 +803,7 @@ pub mod concurrent_graph {
         /// Build the std graph from nodes and concrete queues.
         #[inline]
         pub fn new(
-            node_0: TestSourceNodeU32,
+            node_0: SrcNode,
             node_1: MapNode,
             node_2: TestSinkNodeU32,
             q_0: Q32,
@@ -772,7 +811,7 @@ pub mod concurrent_graph {
         ) -> Self {
             // Build nodes
             let nodes = (
-                Some(NodeLink::<TestSourceNodeU32, 0, 1, (), u32>::new(
+                Some(NodeLink::<SrcNode, 0, 1, (), u32>::new(
                     node_0,
                     NodeIndex::from(0usize),
                     Some("src"),
@@ -792,7 +831,7 @@ pub mod concurrent_graph {
             // Build edges
             let e0 = ConcurrentEdgeLink::<Q32, u32>::new(
                 q_0,
-                EdgeIndex::from(0usize),
+                EdgeIndex::from(1usize),
                 PortId {
                     node: NodeIndex::from(0usize),
                     port: PortIndex(0),
@@ -806,7 +845,7 @@ pub mod concurrent_graph {
             );
             let e1 = ConcurrentEdgeLink::<Q32, u32>::new(
                 q_1,
-                EdgeIndex::from(1usize),
+                EdgeIndex::from(2usize),
                 PortId {
                     node: NodeIndex::from(1usize),
                     port: PortIndex(0),
@@ -835,6 +874,23 @@ pub mod concurrent_graph {
                 ((e0_cons, e0_prod), (e1_cons, e1_prod))
             };
 
+            // Ingress probe pair: typed edge (held by graph) + updater (moved to worker 0)
+            let (probe_edge, updater) = new_probe_edge_pair::<u32>();
+            let ingress_edge = ConcurrentIngressEdgeLink::from_probe(
+                probe_edge,
+                EdgeIndex::from(0usize),
+                PortId {
+                    node: EXTERNAL_INGRESS_NODE,
+                    port: PortIndex(0),
+                },
+                PortId {
+                    node: NodeIndex::from(0usize),
+                    port: PortIndex(0),
+                },
+                INGRESS_POLICY,
+                Some("ingress0"),
+            );
+
             let node_descs = [
                 nodes.0.as_ref().unwrap().descriptor(),
                 nodes.1.as_ref().unwrap().descriptor(),
@@ -845,6 +901,8 @@ pub mod concurrent_graph {
                 nodes,
                 edges: (e0, e1),
                 endpoints,
+                ingress_edge,
+                ingress_updater: Some(updater),
                 node_descs,
             }
         }
@@ -852,16 +910,18 @@ pub mod concurrent_graph {
 
     /// ===== std-only opaque owned-bundle used by GraphApi take/put =====
     pub enum TestPipelineStdOwnedBundle {
-        /// node 0: out=[e0.out]
+        /// node 0: out=[e1.out] + ingress updater.
         N0 {
             /// The detached node link for node 0 (TestSourceNodeU32).
-            node: NodeLink<TestSourceNodeU32, 0, 1, (), u32>,
+            node: NodeLink<SrcNode, 0, 1, (), u32>,
             /// Owned output endpoint for edge e0.out.
             out0: OutEpU32,
             /// Static edge policy for out0 (e0).
             out0_policy: EdgePolicy,
+            /// TODO: Comment..
+            ingress_updater: SourceIngressUpdater,
         },
-        /// node 1: in=[e0.in], out=[e1.out]
+        /// node 1: in=[e1.in], out=[e2.out].
         N1 {
             /// The detached node link for node 1 (TestIdentityModelNodeU32 alias).
             node: NodeLink<MapNode, 1, 1, u32, u32>,
@@ -874,7 +934,7 @@ pub mod concurrent_graph {
             /// Static edge policy for out1 (e1).
             out1_policy: EdgePolicy,
         },
-        /// node 2: in=[e1.in]
+        /// node 2: in=[e2.in]
         N2 {
             /// The detached node link for node 2 (TestSinkNodeU32).
             node: NodeLink<TestSinkNodeU32, 1, 0, u32, ()>,
@@ -885,25 +945,33 @@ pub mod concurrent_graph {
         },
     }
 
-    // ===== GraphApi<3,2> =====
-    impl GraphApi<3, 2> for TestPipelineStd {
+    // ===== GraphApi<3,3> =====
+    impl GraphApi<3, 3> for TestPipelineStd {
         #[inline]
         fn get_node_descriptors(&self) -> [NodeDescriptor; 3] {
             self.node_descs.clone()
         }
         #[inline]
-        fn get_edge_descriptors(&self) -> [EdgeDescriptor; 2] {
-            [self.edges.0.descriptor(), self.edges.1.descriptor()]
+        fn get_edge_descriptors(&self) -> [EdgeDescriptor; 3] {
+            [
+                self.ingress_edge.descriptor(),
+                self.edges.0.descriptor(),
+                self.edges.1.descriptor(),
+            ]
         }
 
         #[inline]
         fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError> {
             let occ = match E {
                 0 => {
+                    // synthetic ingress: read atomic probe
+                    self.ingress_edge.occupancy(&self.ingress_edge.policy())
+                }
+                1 => {
                     let e = &self.edges.0;
                     e.occupancy(&e.policy())
                 }
-                1 => {
+                2 => {
                     let e = &self.edges.1;
                     e.occupancy(&e.policy())
                 }
@@ -915,29 +983,26 @@ pub mod concurrent_graph {
         #[inline]
         fn write_all_edge_occupancies(
             &self,
-            out: &mut [EdgeOccupancy; 2],
+            out: &mut [EdgeOccupancy; 3],
         ) -> Result<(), GraphError> {
             out[0] = self.edge_occupancy_for::<0>()?;
             out[1] = self.edge_occupancy_for::<1>()?;
+            out[2] = self.edge_occupancy_for::<2>()?;
             Ok(())
         }
 
         #[inline]
         fn refresh_occupancies_for_node<const I: usize, const IN: usize, const OUT: usize>(
             &self,
-            out: &mut [EdgeOccupancy; 2],
+            out: &mut [EdgeOccupancy; 3],
         ) -> Result<(), GraphError> {
             let node_idx = NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
                 if ed.upstream.node == node_idx || ed.downstream.node == node_idx {
-                    let ei = (ed.id).0;
-                    match ei {
-                        0 => {
-                            out[0] = self.edge_occupancy_for::<0>()?;
-                        }
-                        1 => {
-                            out[1] = self.edge_occupancy_for::<1>()?;
-                        }
+                    match (ed.id).0 {
+                        0 => out[0] = self.edge_occupancy_for::<0>()?,
+                        1 => out[1] = self.edge_occupancy_for::<1>()?,
+                        2 => out[2] = self.edge_occupancy_for::<2>()?,
                         _ => return Err(GraphError::InvalidEdgeIndex),
                     }
                 }
@@ -992,10 +1057,15 @@ pub mod concurrent_graph {
                     let node = self.nodes.0.take().ok_or(GraphError::InvalidEdgeIndex)?; // or a NodeIndex error variant if you have it
                     let out0_policy = self.edges.0.policy();
                     let out0 = (self.endpoints.0).1.clone();
+                    let ingress_updater = self
+                        .ingress_updater
+                        .take()
+                        .expect("ingress updater already taken");
                     Ok(TestPipelineStdOwnedBundle::N0 {
                         node,
                         out0,
                         out0_policy,
+                        ingress_updater,
                     })
                 }
                 1 => {
@@ -1032,10 +1102,17 @@ pub mod concurrent_graph {
             bundle: Self::OwnedBundle,
         ) -> Result<(), GraphError> {
             match bundle {
-                TestPipelineStdOwnedBundle::N0 { node, out0, .. } => {
+                TestPipelineStdOwnedBundle::N0 {
+                    node,
+                    out0,
+                    out0_policy: _,
+                    ingress_updater,
+                } => {
                     assert!(self.nodes.0.is_none(), "node 0 already present");
                     self.nodes.0 = Some(node);
-                    (self.endpoints.0).1 = out0; // keep local endpoint clone in sync
+                    (self.endpoints.0).1 = out0;
+                    // restore updater so future take() works again
+                    self.ingress_updater = Some(ingress_updater);
                     Ok(())
                 }
                 TestPipelineStdOwnedBundle::N1 {
@@ -1073,7 +1150,12 @@ pub mod concurrent_graph {
                     node,
                     out0,
                     out0_policy,
+                    ingress_updater,
                 } => {
+                    // Update ingress probe from the live source before stepping.
+                    let occ = node.node().source_ref().ingress_occupancy(&INGRESS_POLICY);
+                    ingress_updater.update(occ.items, occ.bytes);
+
                     let inputs: [&mut NoQueue<()>; 0] = [/* empty */];
                     let outputs: [&mut OutEpU32; 1] = [out0];
 
@@ -1082,7 +1164,7 @@ pub mod concurrent_graph {
 
                     let node_id: u32 = 0;
                     let in_edge_ids: [u32; 0] = [/* empty */];
-                    let out_edge_ids: [u32; 1] = [0];
+                    let out_edge_ids: [u32; 1] = [1];
 
                     let mut ctx = crate::node::StepContext::new(
                         inputs,
@@ -1110,8 +1192,8 @@ pub mod concurrent_graph {
                     let out_policies: [EdgePolicy; 1] = [*out1_policy];
 
                     let node_id: u32 = 1;
-                    let in_edge_ids: [u32; 1] = [0];
-                    let out_edge_ids: [u32; 1] = [1];
+                    let in_edge_ids: [u32; 1] = [1];
+                    let out_edge_ids: [u32; 1] = [2];
 
                     let mut ctx = crate::node::StepContext::new(
                         inputs,
@@ -1137,7 +1219,7 @@ pub mod concurrent_graph {
                     let out_policies: [EdgePolicy; 0] = [/* empty */];
 
                     let node_id: u32 = 2;
-                    let in_edge_ids: [u32; 1] = [1];
+                    let in_edge_ids: [u32; 1] = [2];
                     let out_edge_ids: [u32; 0] = [/* empty */];
 
                     let mut ctx = crate::node::StepContext::new(
@@ -1159,7 +1241,7 @@ pub mod concurrent_graph {
 
     // ===== GraphNodeAccess<I> =====
     impl GraphNodeAccess<0> for TestPipelineStd {
-        type Node = NodeLink<TestSourceNodeU32, 0, 1, (), u32>;
+        type Node = NodeLink<SrcNode, 0, 1, (), u32>;
         #[inline]
         fn node_ref(&self) -> &Self::Node {
             self.nodes.0.as_ref().expect("node 0 moved")
@@ -1194,7 +1276,7 @@ pub mod concurrent_graph {
 
     // ===== GraphEdgeAccess<E> =====
     // We expose our StdEdge; runtimes/tooling can still read descriptors/policies.
-    impl GraphEdgeAccess<0> for TestPipelineStd {
+    impl GraphEdgeAccess<1> for TestPipelineStd {
         type Edge = ConcurrentEdgeLink<Q32, u32>;
         #[inline]
         fn edge_ref(&self) -> &Self::Edge {
@@ -1205,7 +1287,7 @@ pub mod concurrent_graph {
             &mut self.edges.0
         }
     }
-    impl GraphEdgeAccess<1> for TestPipelineStd {
+    impl GraphEdgeAccess<2> for TestPipelineStd {
         type Edge = ConcurrentEdgeLink<Q32, u32>;
         #[inline]
         fn edge_ref(&self) -> &Self::Edge {
@@ -1246,7 +1328,7 @@ pub mod concurrent_graph {
     // If you still want `make_step_context(..)` as well, you can add it by borrowing
     // these same endpoint fields; the borrowed method is the key to avoid borrow overlap.
 
-    // node 0: in=[], out=[e0.out]
+    // node 0: in=[], out=[edge id 1]
     impl GraphNodeContextBuilder<0, 0, 1> for TestPipelineStd {
         #[inline]
         fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
@@ -1282,7 +1364,7 @@ pub mod concurrent_graph {
 
             let node_id: u32 = 0;
             let in_edge_ids: [u32; 0] = [/* empty */];
-            let out_edge_ids: [u32; 1] = [0];
+            let out_edge_ids: [u32; 1] = [1];
 
             StepContext::new(
                 inputs,
@@ -1337,7 +1419,7 @@ pub mod concurrent_graph {
 
             let node_id: u32 = 0;
             let in_edge_ids: [u32; 0] = [/* empty */];
-            let out_edge_ids: [u32; 1] = [0];
+            let out_edge_ids: [u32; 1] = [1];
 
             let mut ctx = StepContext::new(
                 inputs,
@@ -1354,7 +1436,7 @@ pub mod concurrent_graph {
         }
     }
 
-    // node 1: in=[e0.in], out=[e1.out]
+    // node 1: in=[edge id 1], out=[edge id 2]
     impl GraphNodeContextBuilder<1, 1, 1> for TestPipelineStd {
         #[inline]
         fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
@@ -1391,8 +1473,8 @@ pub mod concurrent_graph {
             let out_policies: [EdgePolicy; 1] = [out1_policy];
 
             let node_id: u32 = 1;
-            let in_edge_ids: [u32; 1] = [0];
-            let out_edge_ids: [u32; 1] = [1];
+            let in_edge_ids: [u32; 1] = [1];
+            let out_edge_ids: [u32; 1] = [2];
 
             StepContext::new(
                 inputs,
@@ -1448,8 +1530,8 @@ pub mod concurrent_graph {
             let out_policies: [EdgePolicy; 1] = [out1_policy];
 
             let node_id: u32 = 1;
-            let in_edge_ids: [u32; 1] = [0];
-            let out_edge_ids: [u32; 1] = [1];
+            let in_edge_ids: [u32; 1] = [1];
+            let out_edge_ids: [u32; 1] = [2];
 
             let mut ctx = StepContext::new(
                 inputs,
@@ -1466,7 +1548,7 @@ pub mod concurrent_graph {
         }
     }
 
-    // node 2: in=[e1.in], out=[]
+    // node 2: in=[edge id 2], out=[]
     impl GraphNodeContextBuilder<2, 1, 0> for TestPipelineStd {
         #[inline]
         fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
@@ -1501,7 +1583,7 @@ pub mod concurrent_graph {
             let out_policies: [EdgePolicy; 0] = [/* empty */];
 
             let node_id: u32 = 2;
-            let in_edge_ids: [u32; 1] = [1];
+            let in_edge_ids: [u32; 1] = [2];
             let out_edge_ids: [u32; 0] = [/* empty */];
 
             StepContext::new(
@@ -1556,7 +1638,7 @@ pub mod concurrent_graph {
             let out_policies: [EdgePolicy; 0] = [/* empty */];
 
             let node_id: u32 = 2;
-            let in_edge_ids: [u32; 1] = [1];
+            let in_edge_ids: [u32; 1] = [2];
             let out_edge_ids: [u32; 0] = [/* empty */];
 
             let mut ctx = StepContext::new(
@@ -1576,7 +1658,7 @@ pub mod concurrent_graph {
 
     // ===== Std-only owned handoff =====
     impl GraphNodeOwnedEndpointHandoff<0, 0, 1> for TestPipelineStd {
-        type NodeOwned = NodeLink<TestSourceNodeU32, 0, 1, (), u32>;
+        type NodeOwned = NodeLink<SrcNode, 0, 1, (), u32>;
 
         fn take_node_and_endpoints(
             &mut self,

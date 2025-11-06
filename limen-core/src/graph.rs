@@ -9,7 +9,6 @@
 //! Runtimes consume the **typed** `Graph` trait; tooling and codegen use descriptors.
 
 use crate::node::Node;
-
 use crate::prelude::{PlatformClock, Telemetry};
 use crate::{
     edge::{link::EdgeDescriptor, Edge, EdgeOccupancy},

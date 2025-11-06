@@ -9,6 +9,9 @@ use crate::memory::{MemoryClass, PlacementAcceptance};
 use crate::message::Message;
 use crate::message::{MessageFlags, MessageHeader};
 use crate::node::model::InferenceModel;
+#[cfg(feature = "std")]
+use crate::node::source::probe::{SourceIngressProbe, SourceIngressUpdater};
+use crate::node::source::Source;
 use crate::types::{DeadlineNs, QoSClass, SequenceNumber, Ticks, TraceId};
 
 use core::fmt::Write;
@@ -162,6 +165,177 @@ impl Node<0, 1, (), u32> for TestSourceNodeU32 {
 
     fn stop<C, T>(&mut self, _clock: &C, _telemetry: &mut T) -> Result<(), NodeError> {
         Ok(())
+    }
+}
+
+/// A test source that:
+/// - Produces an incrementing `u32` on each `try_produce()`.
+/// - Exposes *ingress* pressure via either an internal backlog or a std probe.
+pub struct TestCounterSourceU32_2 {
+    // Next value to emit.
+    next_value_to_emit: u32,
+
+    // Header template fields:
+    trace_id: TraceId,
+    next_sequence: SequenceNumber,
+    next_creation_tick: Ticks,
+    deadline_ns: Option<DeadlineNs>,
+    qos: QoSClass,
+    flags: MessageFlags,
+
+    // Static properties:
+    node_capabilities: NodeCapabilities,
+    output_placement_acceptance: [PlacementAcceptance; 1],
+
+    // ---- Upstream pressure modelling ----
+    // no_std/internal software backlog (items/bytes before the source).
+    backlog_items: usize,
+    backlog_bytes: usize,
+
+    // std optional shared probe (if present, it is authoritative).
+    #[cfg(feature = "std")]
+    ingress_probe: Option<SourceIngressProbe>,
+    #[cfg(feature = "std")]
+    ingress_updater: Option<SourceIngressUpdater>,
+}
+
+impl TestCounterSourceU32_2 {
+    /// Create a new TestCounterSourceU32_2.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        starting_value_inclusive: u32,
+        trace_id: TraceId,
+        starting_sequence: SequenceNumber,
+        starting_tick: Ticks,
+        deadline_ns: Option<DeadlineNs>,
+        qos: QoSClass,
+        flags: MessageFlags,
+        node_capabilities: NodeCapabilities,
+        output_placement_acceptance: [PlacementAcceptance; 1],
+    ) -> Self {
+        Self {
+            next_value_to_emit: starting_value_inclusive,
+            trace_id,
+            next_sequence: starting_sequence,
+            next_creation_tick: starting_tick,
+            deadline_ns,
+            qos,
+            flags,
+            node_capabilities,
+            output_placement_acceptance,
+            backlog_items: 0,
+            backlog_bytes: 0,
+            #[cfg(feature = "std")]
+            ingress_probe: None,
+            #[cfg(feature = "std")]
+            ingress_updater: None,
+        }
+    }
+
+    /// Attach a std ingress probe + updater (authoritative for occupancy when present).
+    #[cfg(feature = "std")]
+    pub fn with_probe(mut self, probe: SourceIngressProbe, updater: SourceIngressUpdater) -> Self {
+        self.ingress_probe = Some(probe);
+        self.ingress_updater = Some(updater);
+        self
+    }
+
+    /// Set a synthetic upstream backlog (items).
+    #[inline]
+    pub fn set_upstream_backlog_items(&mut self, n: usize) {
+        self.backlog_items = n;
+    }
+
+    /// Set a synthetic upstream backlog (bytes).
+    #[inline]
+    pub fn set_upstream_backlog_bytes(&mut self, b: usize) {
+        self.backlog_bytes = b;
+    }
+
+    #[inline]
+    fn make_header(&self) -> MessageHeader {
+        MessageHeader::new(
+            self.trace_id,
+            self.next_sequence,
+            self.next_creation_tick,
+            self.deadline_ns,
+            self.qos,
+            0,
+            self.flags,
+            MemoryClass::Host,
+        )
+    }
+
+    #[inline]
+    fn advance_counters(&mut self) {
+        // Wrapping increments are fine for a test source.
+        self.next_value_to_emit = self.next_value_to_emit.wrapping_add(1);
+        self.next_sequence = SequenceNumber((self.next_sequence).0.wrapping_add(1));
+        self.next_creation_tick = Ticks((self.next_creation_tick).0.wrapping_add(1));
+    }
+
+    /// Consume one unit from the software backlog when we successfully produce.
+    #[inline]
+    fn consume_software_backlog_one(&mut self) {
+        if self.backlog_items > 0 {
+            self.backlog_items -= 1;
+        }
+        let sz = core::mem::size_of::<u32>();
+        if self.backlog_bytes >= sz {
+            self.backlog_bytes -= sz;
+        } else {
+            self.backlog_bytes = 0;
+        }
+    }
+}
+
+impl Source<u32, 1> for TestCounterSourceU32_2 {
+    type Error = core::convert::Infallible;
+
+    #[inline]
+    fn open(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    #[inline]
+    fn try_produce(&mut self) -> Option<(usize, Message<u32>)> {
+        // Produce one message on port 0.
+        let header = self.make_header();
+        let msg = Message::new(header, self.next_value_to_emit);
+
+        // Advance header counters and consume one item from the *software* backlog.
+        // (If a std probe is attached, the external thread should decrement that.)
+        self.advance_counters();
+        self.consume_software_backlog_one();
+
+        Some((0, msg))
+    }
+
+    #[inline]
+    fn ingress_occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
+        #[cfg(feature = "std")]
+        if let Some(probe) = &self.ingress_probe {
+            return probe.occupancy(policy);
+        }
+
+        // Fallback to software backlog counters.
+        let items = self.backlog_items;
+        let bytes = self.backlog_bytes;
+        EdgeOccupancy {
+            items,
+            bytes,
+            watermark: policy.watermark(items, bytes),
+        }
+    }
+
+    #[inline]
+    fn output_acceptance(&self) -> [PlacementAcceptance; 1] {
+        self.output_placement_acceptance
+    }
+
+    #[inline]
+    fn capabilities(&self) -> NodeCapabilities {
+        self.node_capabilities
     }
 }
 
