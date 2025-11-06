@@ -8,7 +8,7 @@
 //!     pub struct TestPipeline;
 //!
 //!     nodes {
-//!         0: { ty: TestCounterSourceU32, in_ports: 0, out_ports: 1, in_payload: (),  out_payload: u32, name: Some("src") },
+//!         0: { ty: TestCounterSourceU32, in_ports: 0, out_ports: 1, in_payload: (),  out_payload: u32, name: Some("src"), ingress_policy: Q_32_POLICY },
 //!         1: { ty: TestIdentityModelNodeU32, in_ports: 1, out_ports: 1, in_payload: u32, out_payload: u32, name: Some("map") },
 //!         2: { ty: TestSinkNodeU32,   in_ports: 1, out_ports: 0, in_payload: u32, out_payload: (),  name: Some("snk") }
 //!     }
@@ -16,12 +16,6 @@
 //!     edges {
 //!         0: { ty: Q32, payload: u32, from: (0,0), to: (1,0), policy: Q_32_POLICY, name: Some("e0") },
 //!         1: { ty: Q32, payload: u32, from: (1,0), to: (2,0), policy: Q_32_POLICY, name: Some("e1") }
-//!     }
-//!
-//!     wiring {
-//!         node 0: { in: [ ],   out: [ 0 ] },
-//!         node 1: { in: [ 0 ], out: [ 1 ] },
-//!         node 2: { in: [ 1 ], out: [ ] }
 //!     }
 //! }
 //! ```
@@ -768,7 +762,8 @@ pub mod concurrent_graph {
 
     // Test source node types.
     type SrcNode = SourceNode<TestCounterSourceU32_2, u32, 1>;
-    const INGRESS_POLICY: EdgePolicy = Q_32_POLICY;
+    // Per-source ingress policies (S = 1 in this graph). No global default.
+    const INGRESS_POLICIES: [EdgePolicy; 1] = [Q_32_POLICY];
 
     // Test model node types.
     const TEST_MAX_BATCH: usize = 32;
@@ -797,10 +792,10 @@ pub mod concurrent_graph {
             (InEpU32, OutEpU32), // e0: (to node1 in0, from node0 out0)
             (InEpU32, OutEpU32), // e1: (to node2 in0, from node1 out0)
         ),
-        // Synthetic ingress edge (id 0) backed by atomic probe.
-        ingress_edge: ConcurrentIngressEdgeLink<u32>,
-        // Updater to be moved to node 0's worker; kept as Option so we can take().
-        ingress_updater: Option<SourceIngressUpdater>,
+        // Synthetic ingress edges (ids [0..S)), backed by atomic probes. S = 1 here.
+        ingress_edges: [ConcurrentIngressEdgeLink<u32>; 1],
+        // One updater per source; moved to that source worker; kept as Option so we can take().
+        ingress_updaters: [Option<SourceIngressUpdater>; 1],
         // Cache node descriptors so validation still works after nodes are moved out
         node_descs: [NodeDescriptor; 3],
     }
@@ -883,10 +878,10 @@ pub mod concurrent_graph {
                 ((e0_cons, e0_prod), (e1_cons, e1_prod))
             };
 
-            // Ingress probe pair: typed edge (held by graph) + updater (moved to worker 0)
-            let (probe_edge, updater) = new_probe_edge_pair::<u32>();
-            let ingress_edge = ConcurrentIngressEdgeLink::from_probe(
-                probe_edge,
+            // Ingress probe(s): typed edge(s) held by graph + updater(s) moved to source worker(s)
+            let (probe_edge_0, updater_0) = new_probe_edge_pair::<u32>();
+            let ingress_edge_0 = ConcurrentIngressEdgeLink::from_probe(
+                probe_edge_0,
                 EdgeIndex::from(0usize),
                 PortId {
                     node: EXTERNAL_INGRESS_NODE,
@@ -896,9 +891,11 @@ pub mod concurrent_graph {
                     node: NodeIndex::from(0usize),
                     port: PortIndex(0),
                 },
-                INGRESS_POLICY,
+                INGRESS_POLICIES[0],
                 Some("ingress0"),
             );
+            let ingress_edges = [ingress_edge_0];
+            let ingress_updaters = [Some(updater_0)];
 
             let node_descs = [
                 nodes.0.as_ref().unwrap().descriptor(),
@@ -910,8 +907,8 @@ pub mod concurrent_graph {
                 nodes,
                 edges: (e0, e1),
                 endpoints,
-                ingress_edge,
-                ingress_updater: Some(updater),
+                ingress_edges,
+                ingress_updaters,
                 node_descs,
             }
         }
@@ -963,7 +960,7 @@ pub mod concurrent_graph {
         #[inline]
         fn get_edge_descriptors(&self) -> [EdgeDescriptor; 3] {
             [
-                self.ingress_edge.descriptor(),
+                self.ingress_edges[0].descriptor(),
                 self.edges.0.descriptor(),
                 self.edges.1.descriptor(),
             ]
@@ -974,7 +971,7 @@ pub mod concurrent_graph {
             let occ = match E {
                 0 => {
                     // synthetic ingress: read atomic probe
-                    self.ingress_edge.occupancy(&self.ingress_edge.policy())
+                    self.ingress_edges[0].occupancy(&self.ingress_edges[0].policy())
                 }
                 1 => {
                     let e = &self.edges.0;
@@ -1066,8 +1063,7 @@ pub mod concurrent_graph {
                     let node = self.nodes.0.take().ok_or(GraphError::InvalidEdgeIndex)?; // or a NodeIndex error variant if you have it
                     let out0_policy = self.edges.0.policy();
                     let out0 = (self.endpoints.0).1.clone();
-                    let ingress_updater = self
-                        .ingress_updater
+                    let ingress_updater = self.ingress_updaters[0]
                         .take()
                         .expect("ingress updater already taken");
                     Ok(TestPipelineStdOwnedBundle::N0 {
@@ -1121,7 +1117,7 @@ pub mod concurrent_graph {
                     self.nodes.0 = Some(node);
                     (self.endpoints.0).1 = out0;
                     // restore updater so future take() works again
-                    self.ingress_updater = Some(ingress_updater);
+                    self.ingress_updaters[0] = Some(ingress_updater);
                     Ok(())
                 }
                 TestPipelineStdOwnedBundle::N1 {
@@ -1162,7 +1158,10 @@ pub mod concurrent_graph {
                     ingress_updater,
                 } => {
                     // Update ingress probe from the live source before stepping.
-                    let occ = node.node().source_ref().ingress_occupancy(&INGRESS_POLICY);
+                    let occ = node
+                        .node()
+                        .source_ref()
+                        .ingress_occupancy(&INGRESS_POLICIES[0]);
                     ingress_updater.update(occ.items, occ.bytes);
 
                     let inputs: [&mut NoQueue<()>; 0] = [/* empty */];
