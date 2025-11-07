@@ -4,7 +4,11 @@
 //!
 //! This crate turns a compact, declarative graph DSL into fully-typed Rust
 //! implementations that conform to the `limen-core` graph, node, edge, and
-//! policy traits. It is designed to be used in **two** ways:
+//! policy traits. The emitted code includes **two graph flavors**:
+//! a non-`std` (embedded) graph and a `std` (concurrent) graph, with the latter
+//! gated behind `#[cfg(feature = "std")]` **in the downstream crate**.
+//!
+//! It is designed to be used in **two** ways:
 //!
 //! 1. **Proc-macro mode** (recommended for quick iteration):
 //!
@@ -92,6 +96,33 @@
 //!    include!(concat!(env!("OUT_DIR"), "/my_graph.rs"));
 //!    ```
 //!
+//! ## What gets generated (at a glance)
+//!
+//! For each graph definition, the generator emits:
+//!
+//! - **Non-`std` graph**: a concrete struct named exactly as your DSL type
+//!   (for example, `MyGraph`) which stores:
+//!   - `nodes`: a tuple of `NodeLink<..>` (one per node),
+//!   - `edges`: a tuple of `EdgeLink<..>` (one per **real** edge; see ingress below).
+//!     This flavor does **not** implement owned-bundle handoff and is suitable for `no_std` targets.
+//!
+//! - **`std` (concurrent) graph**: a nested module `concurrent_graph` containing:
+//!   - `struct MyGraphStd`: uses lock-free SPSC queues via `ConcurrentEdgeLink`, and
+//!     exposes external ingress to sources via probe links,
+//!   - an owned-bundle enum `MyGraphStdOwnedBundle` enabling safe node + endpoint handoff,
+//!   - implementations that support stepping a moved-out bundle.
+//!     This module is compiled only when the **downstream** crate enables its `std` feature.
+//!
+//! In both flavors, the concrete graph type implements:
+//! - `limen_core::graph::GraphApi<NODES, EDGES>`,
+//! - per-index helper traits `GraphNodeAccess`, `GraphEdgeAccess`, `GraphNodeTypes`,
+//!   and `GraphNodeContextBuilder` for runtime integration.
+//!
+//! ### Feature flag note
+//! The `std`-flavored code is emitted behind `#[cfg(feature = "std")]` **in the generated file**.
+//! This crate (`limen-codegen`) does not define or forward a `std` feature; you control it in
+//! the crate that **compiles** the generated code.
+//!
 //! ## DSL: shape and types
 //!
 //! The DSL defines one graph per block:
@@ -121,6 +152,11 @@
 //! - `name: <Option<Expr>>` — Optional human-friendly identifier (for descriptors).
 //!
 //! ### Important rules and assumptions
+//!
+//! 0. **Two edge classes**  
+//!    - *Ingress* edges are **synthetic** and created only for source nodes that
+//!      specify `ingress_policy`. They occupy the lowest global edge indices.
+//!    - *Real* edges are those declared in `edges { ... }` and are stored in the graph.
 //!
 //! 1. **Contiguous indices**  
 //!    - Node indices must be contiguous `0..nodes.len()` with no gaps.
@@ -160,8 +196,15 @@
 //! It also implements the `limen_core::graph::GraphApi` for the concrete graph type, plus the
 //! per-index helper traits (`GraphNodeAccess`, `GraphEdgeAccess`, `GraphNodeTypes`,
 //! `GraphNodeContextBuilder`) that wire the graph into the Limen runtime APIs.
+//!    - The concurrent queue types referenced by the `std` flavor live under
+//!      `limen_core::edge::spsc_concurrent`.
 //!
 //! ## Programmatic entry points (when not using the proc macro)
+//!
+//! All of the following:
+//! - parse the DSL (from tokens or string),
+//! - validate its structure and typing,
+//! - and **emit both flavors** (non-`std` and `std`-gated) into a single token stream or file.
 //!
 //! - [`expand_tokens`]: parse+validate+emit from a token stream (used by the proc macro).
 //! - [`expand_str_to_tokens`]: parse+validate+emit from a `&str` DSL (for build scripts or tests).
@@ -207,7 +250,9 @@ pub enum CodegenError {
     Pretty(String),
 }
 
-/// Parse, validate, and emit Rust code from a proc-macro input token stream.
+/// Parse, validate, and emit Rust code from a proc-macro input token stream,
+/// producing **both** the non-`std` and `std`-gated concurrent graph flavors
+/// in the returned token stream.
 ///
 /// This is the entry used by `limen-build::define_graph! { ... }`.
 ///
@@ -228,7 +273,9 @@ pub fn expand_tokens(input: TokenStream2) -> Result<TokenStream2, CodegenError> 
     Ok(gen::emit(&g))
 }
 
-/// Parse, validate, and emit Rust code from a DSL string (build script helper).
+/// Parse, validate, and emit Rust code from a DSL string (build script helper),
+/// producing **both** the non-`std` and `std`-gated concurrent graph flavors
+/// in the returned token stream.
 ///
 /// Typical usage is inside `build.rs`, or in tests that snapshot generated code.
 ///
@@ -249,7 +296,9 @@ pub fn expand_str_to_tokens(spec: &str) -> Result<TokenStream2, CodegenError> {
     Ok(gen::emit(&g))
 }
 
-/// Parse, validate, emit, and **pretty-print** the Rust code for a DSL string.
+/// Parse, validate, emit, and **pretty-print** the Rust code for a DSL string,
+/// including **both** flavors (non-`std` and `std`-gated) in one formatted
+/// Rust source file.
 ///
 /// This is convenient when you want stable, human-readable source for inspection
 /// or to write to disk with [`expand_str_to_file`].
@@ -271,7 +320,9 @@ pub fn expand_str_to_string(spec: &str) -> Result<String, CodegenError> {
     Ok(prettyplease::unparse(&file))
 }
 
-/// Parse, validate, emit, pretty-print, and **write** the Rust code for a DSL string to `dest`.
+/// Parse, validate, emit, pretty-print, and **write** the Rust code for a DSL string to `dest`,
+/// including **both** flavors (non-`std` and `std`-gated) in the same file. Parent
+/// directories are created if needed, and writes are performed atomically.
 ///
 /// This helper creates parent directories if needed, writes atomically to `dest`, and returns
 /// the resolved path. It is ideal for use in `build.rs`, where you can later `include!()` the file.
