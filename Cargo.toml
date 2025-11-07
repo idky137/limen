@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "limen-core",
+    "limen-codegen",
     "limen-light",
     "limen",
     "limen-processing",
