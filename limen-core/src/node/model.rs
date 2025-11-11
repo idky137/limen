@@ -17,11 +17,12 @@ use crate::compute::{BackendCapabilities, ComputeBackend, ComputeModel, ModelMet
 use crate::edge::{Edge, EnqueueResult};
 use crate::errors::{InferenceError, NodeError, QueueError};
 use crate::memory::PlacementAcceptance;
-use crate::message::payload::Payload;
-use crate::message::{Message, MessageHeader};
+use crate::message::{payload::Payload, Message, MessageHeader};
 use crate::node::{Node, NodeCapabilities, NodeKind, StepContext, StepResult};
 use crate::policy::NodePolicy;
 use crate::prelude::{PlatformClock, Telemetry};
+
+use heapless::Vec as HeaplessVec;
 
 // alloc-backed buffers only when the feature is enabled
 #[cfg(feature = "alloc")]
@@ -213,7 +214,7 @@ where
         // Batched path:
         #[cfg(not(feature = "alloc"))]
         {
-            return self.step_batched_stack::<InQ, OutQ, C, T>(cx, nmax);
+            self.step_batched_stack::<InQ, OutQ, C, T>(cx, nmax)
         }
         #[cfg(feature = "alloc")]
         {
@@ -262,31 +263,41 @@ where
     ) -> Result<StepResult, NodeError>
     where
         // NOTE: for stack arrays without `alloc`, we require `Copy + Default` on InP.
-        InP: Payload + Copy + Default,
+        InP: Payload,
         InQ: Edge<Item = Message<InP>>,
         OutQ: Edge<Item = Message<OutP>>,
         C: PlatformClock + Sized,
         T: Telemetry + Sized,
     {
-        // Fixed-capacity, stack-allocated scratch.
+        // Fixed-capacity, stack-allocated scratch (no alloc).
         let mut headers: [MessageHeader; MAX_BATCH] =
             core::array::from_fn(|_| MessageHeader::empty());
-        let mut in_buf: [InP; MAX_BATCH] = core::array::from_fn(|_| InP::default());
+        let mut in_buf: HeaplessVec<InP, { MAX_BATCH }> = HeaplessVec::new();
         let mut out_buf: [OutP; MAX_BATCH] = core::array::from_fn(|_| OutP::default());
 
-        let mut n = 0usize;
-        while n < nmax {
+        while in_buf.len() < nmax {
             match cx.in_try_pop(0) {
                 Ok(m) => {
                     let (h, p) = m.into_parts();
-                    headers[n] = h;
-                    in_buf[n] = p;
-                    n += 1;
+                    let idx = in_buf.len();
+                    headers[idx] = h;
+                    // `nmax <= MAX_BATCH` should guarantee capacity; if this ever
+                    // fails, it indicates a logic error. Avoid imposing `Debug`
+                    // on `InP` by not using `.expect(..)`.
+                    if let Err(_overflowed) = in_buf.push(p) {
+                        debug_assert!(
+                            false,
+                            "heapless capacity exceeded (nmax <= MAX_BATCH invariant broken)"
+                        );
+                        return Err(NodeError::execution_failed().with_code(1));
+                    }
                 }
                 Err(QueueError::Empty) | Err(QueueError::Backpressured) => break,
                 Err(e) => return Err(map_queue_err(e)),
             }
         }
+
+        let n = in_buf.len();
 
         if n == 0 {
             return Ok(StepResult::NoInput);
@@ -296,7 +307,7 @@ where
         headers[n - 1].flags = headers[n - 1].flags.last_in_batch();
 
         self.model
-            .infer_batch(&in_buf[..n], &mut out_buf[..n])
+            .infer_batch(in_buf.as_slice(), &mut out_buf[..n])
             .map_err(map_inference_err)?;
 
         for i in 0..n {

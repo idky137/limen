@@ -1,0 +1,17 @@
+[package]
+name = "limen-build"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Proc-macro wrapper for limen-codegen: define_graph! DSL to generate Limen graphs."
+repository = "https://example.com/your/repo"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+limen-codegen = { path = "../limen-codegen" }
+
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

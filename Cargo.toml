@@ -2,6 +2,7 @@
 members = [
     "limen-core",
     "limen-codegen",
+    "limen-build",
     "limen-light",
     "limen",
     "limen-processing",
