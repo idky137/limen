@@ -158,9 +158,9 @@ impl<'a> NonStd<'a> {
         let out_ports = n.out_ports;
 
         if in_ports == 0 && out_ports > 0 {
-            quote! { limen_core::node::source::SourceNode<#ty, #out_p, {#out_ports}> }
+            quote! { limen_core::node::source::SourceNode<#ty, #out_p, #out_ports> }
         } else if out_ports == 0 && in_ports > 0 {
-            quote! { limen_core::node::sink::SinkNode<#ty, #in_p, {#in_ports}> }
+            quote! { limen_core::node::sink::SinkNode<#ty, #in_p, #in_ports> }
         } else {
             quote! { #ty }
         }
@@ -173,7 +173,7 @@ impl<'a> NonStd<'a> {
         let out_p = &n.out_payload;
         let in_ports = n.in_ports;
         let out_ports = n.out_ports;
-        quote! { limen_core::node::link::NodeLink<#ntype, {#in_ports}, {#out_ports}, #in_p, #out_p> }
+        quote! { limen_core::node::link::NodeLink<#ntype, #in_ports, #out_ports, #in_p, #out_p> }
     }
 
     /// The `EdgeLink` wrapper type for this edge instance.
@@ -216,7 +216,7 @@ impl<'a> NonStd<'a> {
             let in_p = &n.in_payload;
             let out_p = &n.out_payload;
             quote! {
-                limen_core::node::link::NodeLink::<#ntype, {#in_ports}, {#out_ports}, #in_p, #out_p>
+                limen_core::node::link::NodeLink::<#ntype, #in_ports, #out_ports, #in_p, #out_p>
                     ::new(
                         #node_ident.into(),
                         limen_core::types::NodeIndex::from(#id as usize),
@@ -293,7 +293,8 @@ impl<'a> NonStd<'a> {
             let q_ident = format_ident!("q_{}", id);
             quote! { #q_ident : #q }
         });
-        quote! { #( #node_args ),*, #( , #edge_args )* }
+        let args: Vec<TokenStream2> = node_args.chain(edge_args).collect();
+        quote! { #( #args ),* }
     }
 
     /// Create the node descriptor array (`[NodeDescriptor; NODES]`).
@@ -401,12 +402,20 @@ impl<'a> NonStd<'a> {
 
     /// Refresh the occupancies for all edges touching a specific node `I`.
     fn refresh_for_node(&self) -> TokenStream2 {
+        let total = self.ingress_count() + self.g.edges.len();
+        let arms = (0..total).map(|k| {
+            let kk = syn::Index::from(k);
+            quote! { #k => { out[#k] = self.edge_occupancy_for::<#kk>()?; } }
+        });
         quote! {
             let node_idx = limen_core::types::NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
                 if ed.upstream.node == node_idx || ed.downstream.node == node_idx {
                     let k = (ed.id).as_usize();
-                    out[k] = self.edge_occupancy_for::<{k}>()?;
+                    match k {
+                        #( #arms )*,
+                        _ => unreachable!("invalid edge index"),
+                    }
                 }
             }
             Ok(())
@@ -424,7 +433,7 @@ impl<'a> NonStd<'a> {
             let in_ports = n.in_ports;
             let out_ports = n.out_ports;
             quote! {
-                #i => <Self as limen_core::graph::GraphNodeContextBuilder<#i, {#in_ports}, {#out_ports}>>::with_node_and_step_context::<
+                #i => <Self as limen_core::graph::GraphNodeContextBuilder<#i, #in_ports, #out_ports>>::with_node_and_step_context::<
                     C, T, limen_core::node::StepResult, limen_core::errors::NodeError
                 >(self, clock, telemetry, |node, ctx| node.step(ctx)),
             }
@@ -513,7 +522,7 @@ impl<'a> NonStd<'a> {
                 };
 
                 quote! {
-                    impl limen_core::graph::GraphNodeTypes<#i, {#in_ports}, {#out_ports}> for #name {
+                    impl limen_core::graph::GraphNodeTypes<#i, #in_ports, #out_ports> for #name {
                         type InP = #in_p;
                         type OutP = #out_p;
                         type InQ = #inq_ty;
@@ -534,7 +543,9 @@ impl<'a> NonStd<'a> {
         self.g
             .nodes
             .iter()
-            .map(|n| {
+            .enumerate()
+            .map(|(tuple_pos, n)| {
+                let tuple_idx = Index::from(tuple_pos);
                 let i = n.idx;
                 let in_ports = n.in_ports;
                 let out_ports = n.out_ports;
@@ -607,7 +618,7 @@ impl<'a> NonStd<'a> {
                 let i_const = i;
 
                 quote! {
-                    impl limen_core::graph::GraphNodeContextBuilder<#i_const, {#in_ports}, {#out_ports}> for #name {
+                    impl limen_core::graph::GraphNodeContextBuilder<#i_const, #in_ports, #out_ports> for #name {
                         #[inline]
                         fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
                             &'graph mut self,
@@ -615,11 +626,11 @@ impl<'a> NonStd<'a> {
                             telemetry: &'telemetry mut T,
                         ) -> limen_core::node::StepContext<
                             'graph, 'telemetry, 'clock,
-                            {#in_ports}, {#out_ports},
-                            <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InP,
-                            <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutP,
-                            <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ,
-                            <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ,
+                            #in_ports, #out_ports,
+                            <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InP,
+                            <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutP,
+                            <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ,
+                            <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ,
                             C, T
                         >
                         where
@@ -627,15 +638,15 @@ impl<'a> NonStd<'a> {
                             C: limen_core::prelude::PlatformClock + Sized,
                             T: limen_core::prelude::Telemetry + Sized,
                         {
-                            let inputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ; {#in_ports}] = [ #( #input_qs ),* ];
-                            let outputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ; {#out_ports}] = [ #( #output_qs ),* ];
+                            let in_policies: [limen_core::policy::EdgePolicy; #in_ports] = [ #( #in_pols ),* ];
+                            let out_policies: [limen_core::policy::EdgePolicy; #out_ports] = [ #( #out_pols ),* ];
 
-                            let in_policies: [limen_core::policy::EdgePolicy; {#in_ports}] = [ #( #in_pols ),* ];
-                            let out_policies: [limen_core::policy::EdgePolicy; {#out_ports}] = [ #( #out_pols ),* ];
+                            let inputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ; #in_ports] = [ #( #input_qs ),* ];
+                            let outputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ; #out_ports] = [ #( #output_qs ),* ];
 
                             let node_id: u32 = #i_const as u32;
-                            let in_edge_ids: [u32; {#in_ports}] = [ #( #in_ids as u32 ),* ];
-                            let out_edge_ids: [u32; {#out_ports}] = [ #( #out_ids as u32 ),* ];
+                            let in_edge_ids: [u32; #in_ports] = [ #( #in_ids as u32 ),* ];
+                            let out_edge_ids: [u32; #out_ports] = [ #( #out_ids as u32 ),* ];
 
                             limen_core::node::StepContext::new(
                                 inputs, outputs,
@@ -656,11 +667,11 @@ impl<'a> NonStd<'a> {
                                     '_,
                                     'telemetry,
                                     'clock,
-                                    {#in_ports}, {#out_ports},
-                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InP,
-                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutP,
-                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ,
-                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ,
+                                    #in_ports, #out_ports,
+                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InP,
+                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutP,
+                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ,
+                                    <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ,
                                     C, T
                                 >,
                             ) -> Result<R, E>,
@@ -671,20 +682,23 @@ impl<'a> NonStd<'a> {
                             C: limen_core::prelude::PlatformClock + Sized,
                             T: limen_core::prelude::Telemetry + Sized,
                         {
-                            let inputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ; {#in_ports}] = [ #( #input_qs ),* ];
-                            let outputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ; {#out_ports}] = [ #( #output_qs ),* ];
-                            let in_policies: [limen_core::policy::EdgePolicy; {#in_ports}] = [ #( #in_pols ),* ];
-                            let out_policies: [limen_core::policy::EdgePolicy; {#out_ports}] = [ #( #out_pols ),* ];
+                            let in_policies: [limen_core::policy::EdgePolicy; #in_ports] = [ #( #in_pols ),* ];
+                            let out_policies: [limen_core::policy::EdgePolicy; #out_ports] = [ #( #out_pols ),* ];
+
+                            let inputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ; #in_ports] = [ #( #input_qs ),* ];
+                            let outputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ; #out_ports] = [ #( #output_qs ),* ];
+
                             let node_id: u32 = #i_const as u32;
-                            let in_edge_ids: [u32; {#in_ports}] = [ #( #in_ids as u32 ),* ];
-                            let out_edge_ids: [u32; {#out_ports}] = [ #( #out_ids as u32 ),* ];
+                            let in_edge_ids: [u32; #in_ports] = [ #( #in_ids as u32 ),* ];
+                            let out_edge_ids: [u32; #out_ports] = [ #( #out_ids as u32 ),* ];
+
                             let mut ctx = limen_core::node::StepContext::new(
                                 inputs, outputs,
                                 in_policies, out_policies,
                                 node_id, in_edge_ids, out_edge_ids,
                                 clock, telemetry
                             );
-                            f(<Self as limen_core::graph::GraphNodeAccess<#i_const>>::node_mut(self), &mut ctx)
+                            f(&mut self.nodes.#tuple_idx, &mut ctx)
                         }
                     }
                 }
@@ -802,16 +816,21 @@ impl<'a> NonStd<'a> {
                     #step_match
                 }
 
-                // Owned bundle flow intentionally omitted for non-std graph.
-                #[cfg(feature = "std")]
+                // Provide the OwnedBundle API unconditionally so GraphApi is fully implemented.
                 type OwnedBundle = ();
-                #[cfg(feature = "std")]
-                fn take_owned_bundle_by_index(&mut self, _index: usize) -> Result<Self::OwnedBundle, limen_core::errors::GraphError> {
+                #[inline]
+                fn take_owned_bundle_by_index(&mut self, _index: usize)
+                    -> Result<Self::OwnedBundle, limen_core::errors::GraphError>
+                {
                     Err(limen_core::errors::GraphError::InvalidEdgeIndex)
                 }
-                #[cfg(feature = "std")]
-                fn put_owned_bundle_by_index(&mut self, _bundle: Self::OwnedBundle) -> Result<(), limen_core::errors::GraphError> { Ok(()) }
-                #[cfg(feature = "std")]
+                #[inline]
+                fn put_owned_bundle_by_index(&mut self, _bundle: Self::OwnedBundle)
+                    -> Result<(), limen_core::errors::GraphError>
+                {
+                    Err(limen_core::errors::GraphError::InvalidEdgeIndex)
+                }
+                #[inline]
                 fn step_owned_bundle<C, T>(
                     _bundle: &mut Self::OwnedBundle,
                     _clock: &C,
@@ -910,7 +929,7 @@ impl<'a> Std<'a> {
         let out_p = &n.out_payload;
         let in_ports = n.in_ports;
         let out_ports = n.out_ports;
-        quote! { limen_core::node::link::NodeLink<#ntype, {#in_ports}, {#out_ports}, #in_p, #out_p> }
+        quote! { limen_core::node::link::NodeLink<#ntype, #in_ports, #out_ports, #in_p, #out_p> }
     }
 
     /// The concurrent `EdgeLink` wrapper type (`ConcurrentEdgeLink`) for a real edge.
@@ -1000,7 +1019,8 @@ impl<'a> Std<'a> {
             let q_ident = format_ident!("q_{}", id);
             quote! { #q_ident : #q }
         });
-        quote! { #( #node_args ),*, #( , #edge_args )* }
+        let args: Vec<TokenStream2> = node_args.chain(edge_args).collect();
+        quote! { #( #args ),* }
     }
 
     /// Construct the nodes tuple for the concurrent graph, wrapping each
@@ -1022,7 +1042,7 @@ impl<'a> Std<'a> {
             let out_p = &n.out_payload;
             quote! {
                 core::option::Option::Some(
-                    limen_core::node::link::NodeLink::<#ntype, {#in_ports}, {#out_ports}, #in_p, #out_p>
+                    limen_core::node::link::NodeLink::<#ntype, #in_ports, #out_ports, #in_p, #out_p>
                         ::new(#node_ident.into(), limen_core::types::NodeIndex::from(#id as usize), #name_opt)
                 )
             }
@@ -1264,29 +1284,34 @@ impl<'a> Std<'a> {
 
     /// Emit `GraphNodeTypes<I, IN, OUT>` impls for all nodes (concurrent flavor).
     fn graph_node_types_impls_std(&self, gname: &Ident) -> Vec<TokenStream2> {
-        self.g.nodes.iter().map(|n| {
-            let i = n.idx;
-            let in_p = &n.in_payload;
-            let out_p = &n.out_payload;
-            let in_ports = n.in_ports;
-            let out_ports = n.out_ports;
-            let inq_ty = self.std_inq_ty_for_node(i);
-            let outq_ty = self.std_outq_ty_for_node(i);
-            quote! {
-                impl limen_core::graph::GraphNodeTypes<#i, {#in_ports}, {#out_ports}> for #gname {
-                    type InP = #in_p;
-                    type OutP = #out_p;
-                    type InQ = #inq_ty;
-                    type OutQ = #outq_ty;
+        self.g
+            .nodes
+            .iter()
+            .map(|n| {
+                let i = n.idx;
+                let in_p = &n.in_payload;
+                let out_p = &n.out_payload;
+                let in_ports = n.in_ports;
+                let out_ports = n.out_ports;
+                let inq_ty = self.std_inq_ty_for_node(i);
+                let outq_ty = self.std_outq_ty_for_node(i);
+                quote! {
+                    impl limen_core::graph::GraphNodeTypes<#i, #in_ports, #out_ports> for #gname {
+                        type InP = #in_p;
+                        type OutP = #out_p;
+                        type InQ = #inq_ty;
+                        type OutQ = #outq_ty;
+                    }
                 }
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Emit `GraphNodeContextBuilder<I, IN, OUT>` impls for all nodes using
     /// persistent endpoints and policies.
     fn graph_node_ctx_impls_std(&self, gname: &Ident) -> Vec<TokenStream2> {
-        self.g.nodes.iter().map(|n| {
+        self.g.nodes.iter().enumerate().map(|(tuple_pos, n)| {
+            let tuple_idx = Index::from(tuple_pos);
             let i = n.idx;
             let in_ports = n.in_ports;
             let out_ports = n.out_ports;
@@ -1337,7 +1362,7 @@ impl<'a> Std<'a> {
             let i_const = i;
 
             quote! {
-                impl limen_core::graph::GraphNodeContextBuilder<#i_const, {#in_ports}, {#out_ports}> for #gname {
+                impl limen_core::graph::GraphNodeContextBuilder<#i_const, #in_ports, #out_ports> for #gname {
                     #[inline]
                     fn make_step_context<'graph, 'telemetry, 'clock, C, T>(
                         &'graph mut self,
@@ -1345,11 +1370,11 @@ impl<'a> Std<'a> {
                         telemetry: &'telemetry mut T,
                     ) -> limen_core::node::StepContext<
                         'graph, 'telemetry, 'clock,
-                        {#in_ports}, {#out_ports},
-                        <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InP,
-                        <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutP,
-                        <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ,
-                        <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ,
+                        #in_ports, #out_ports,
+                        <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InP,
+                        <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutP,
+                        <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ,
+                        <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ,
                         C, T
                     >
                     where
@@ -1357,15 +1382,15 @@ impl<'a> Std<'a> {
                         C: limen_core::prelude::PlatformClock + Sized,
                         T: limen_core::prelude::Telemetry + Sized,
                     {
-                        let inputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ; {#in_ports}] = [ #( #input_eps ),* ];
-                        let outputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ; {#out_ports}] = [ #( #output_eps ),* ];
+                        let in_policies: [limen_core::policy::EdgePolicy; #in_ports] = [ #( #in_pols ),* ];
+                        let out_policies: [limen_core::policy::EdgePolicy; #out_ports] = [ #( #out_pols ),* ];
 
-                        let in_policies: [limen_core::policy::EdgePolicy; {#in_ports}] = [ #( #in_pols ),* ];
-                        let out_policies: [limen_core::policy::EdgePolicy; {#out_ports}] = [ #( #out_pols ),* ];
+                        let inputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ; #in_ports] = [ #( #input_eps ),* ];
+                        let outputs: [&'graph mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ; #out_ports] = [ #( #output_eps ),* ];
 
                         let node_id: u32 = #i_const as u32;
-                        let in_edge_ids: [u32; {#in_ports}] = [ #( #in_ids as u32 ),* ];
-                        let out_edge_ids: [u32; {#out_ports}] = [ #( #out_ids as u32 ),* ];
+                        let in_edge_ids: [u32; #in_ports] = [ #( #in_ids as u32 ),* ];
+                        let out_edge_ids: [u32; #out_ports] = [ #( #out_ids as u32 ),* ];
 
                         limen_core::node::StepContext::new(
                             inputs, outputs,
@@ -1386,11 +1411,11 @@ impl<'a> Std<'a> {
                                 '_,
                                 'telemetry,
                                 'clock,
-                                {#in_ports}, {#out_ports},
-                                <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InP,
-                                <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutP,
-                                <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ,
-                                <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ,
+                                #in_ports, #out_ports,
+                                <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InP,
+                                <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutP,
+                                <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ,
+                                <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ,
                                 C, T
                             >,
                         ) -> Result<R, E>,
@@ -1401,20 +1426,23 @@ impl<'a> Std<'a> {
                         C: limen_core::prelude::PlatformClock + Sized,
                         T: limen_core::prelude::Telemetry + Sized,
                     {
-                        let inputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::InQ; {#in_ports}] = [ #( #input_eps ),* ];
-                        let outputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, {#in_ports}, {#out_ports}>>::OutQ; {#out_ports}] = [ #( #output_eps ),* ];
-                        let in_policies: [limen_core::policy::EdgePolicy; {#in_ports}] = [ #( #in_pols ),* ];
-                        let out_policies: [limen_core::policy::EdgePolicy; {#out_ports}] = [ #( #out_pols ),* ];
+                        let in_policies: [limen_core::policy::EdgePolicy; #in_ports] = [ #( #in_pols ),* ];
+                        let out_policies: [limen_core::policy::EdgePolicy; #out_ports] = [ #( #out_pols ),* ];
+
+                        let inputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::InQ; #in_ports] = [ #( #input_eps ),* ];
+                        let outputs: [&mut <Self as limen_core::graph::GraphNodeTypes<#i_const, #in_ports, #out_ports>>::OutQ; #out_ports] = [ #( #output_eps ),* ];
+
                         let node_id: u32 = #i_const as u32;
-                        let in_edge_ids: [u32; {#in_ports}] = [ #( #in_ids as u32 ),* ];
-                        let out_edge_ids: [u32; {#out_ports}] = [ #( #out_ids as u32 ),* ];
+                        let in_edge_ids: [u32; #in_ports] = [ #( #in_ids as u32 ),* ];
+                        let out_edge_ids: [u32; #out_ports] = [ #( #out_ids as u32 ),* ];
+
                         let mut ctx = limen_core::node::StepContext::new(
                             inputs, outputs,
                             in_policies, out_policies,
                             node_id, in_edge_ids, out_edge_ids,
                             clock, telemetry
                         );
-                        f(<Self as limen_core::graph::GraphNodeAccess<#i_const>>::node_mut(self), &mut ctx)
+                        f(self.nodes.#tuple_idx.as_mut().expect("node moved"), &mut ctx)
                     }
                 }
             }
@@ -1488,12 +1516,20 @@ impl<'a> Std<'a> {
 
     /// Refresh the occupancies for all edges touching a specific node `I`.
     fn refresh_for_node_std(&self) -> TokenStream2 {
+        let total = self.ingress_count() + self.g.edges.len();
+        let arms = (0..total).map(|k| {
+            let kk = syn::Index::from(k);
+            quote! { #k => { out[#k] = self.edge_occupancy_for::<#kk>()?; } }
+        });
         quote! {
             let node_idx = limen_core::types::NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
                 if ed.upstream.node == node_idx || ed.downstream.node == node_idx {
                     let k = (ed.id).as_usize();
-                    out[k] = self.edge_occupancy_for::<{k}>()?;
+                    match k {
+                        #( #arms )*,
+                        _ => unreachable!("invalid edge index"),
+                    }
                 }
             }
             Ok(())
@@ -1508,7 +1544,7 @@ impl<'a> Std<'a> {
             let in_ports = n.in_ports;
             let out_ports = n.out_ports;
             quote! {
-                #i => <Self as limen_core::graph::GraphNodeContextBuilder<#i, {#in_ports}, {#out_ports}>>::with_node_and_step_context::<
+                #i => <Self as limen_core::graph::GraphNodeContextBuilder<#i, #in_ports, #out_ports>>::with_node_and_step_context::<
                     C, T, limen_core::node::StepResult, limen_core::errors::NodeError
                 >(self, clock, telemetry, |node, ctx| node.step(ctx)),
             }
@@ -1549,10 +1585,10 @@ impl<'a> Std<'a> {
             quote! {
                 #variant {
                     node: #nlink,
-                    ins: [#inq_ty; {#in_ports}],
-                    outs: [#outq_ty; {#out_ports}],
-                    in_policies: [limen_core::policy::EdgePolicy; {#in_ports}],
-                    out_policies: [limen_core::policy::EdgePolicy; {#out_ports}]
+                    ins: [#inq_ty; #in_ports],
+                    outs: [#outq_ty; #out_ports],
+                    in_policies: [limen_core::policy::EdgePolicy; #in_ports],
+                    out_policies: [limen_core::policy::EdgePolicy; #out_ports]
                     #maybe_ing_field
                 }
             }
@@ -1739,11 +1775,11 @@ impl<'a> Std<'a> {
             quote! {
                 #pat => {
                     #maybe_ing_update
-                    let inputs: [&mut #inq_ty; {#in_ports}] = [ #( #in_refs ),* ];
-                    let outputs: [&mut #outq_ty; {#out_ports}] = [ #( #out_refs ),* ];
+                    let inputs: [&mut #inq_ty; #in_ports] = [ #( #in_refs ),* ];
+                    let outputs: [&mut #outq_ty; #out_ports] = [ #( #out_refs ),* ];
                     let node_id: u32 = #i as u32;
-                    let in_edge_ids: [u32; {#in_ports}] = [ #( #in_ids as u32 ),* ];
-                    let out_edge_ids: [u32; {#out_ports}] = [ #( #out_ids as u32 ),* ];
+                    let in_edge_ids: [u32; #in_ports] = [ #( #in_ids as u32 ),* ];
+                    let out_edge_ids: [u32; #out_ports] = [ #( #out_ids as u32 ),* ];
                     let mut ctx = limen_core::node::StepContext::new(
                         inputs,
                         outputs,
@@ -1854,16 +1890,16 @@ impl<'a> Std<'a> {
             let iidx = Index::from(i);
 
             quote! {
-                impl limen_core::graph::GraphNodeOwnedEndpointHandoff<#i, {#in_ports}, {#out_ports}> for #gname {
+                impl limen_core::graph::GraphNodeOwnedEndpointHandoff<#i, #in_ports, #out_ports> for #gname {
                     type NodeOwned = <Self as limen_core::graph::GraphNodeAccess<#i>>::Node;
                     fn take_node_and_endpoints(
                         &mut self,
                     ) -> (
                         Self::NodeOwned,
-                        [<Self as limen_core::graph::GraphNodeTypes<#i, {#in_ports}, {#out_ports}>>::InQ; {#in_ports}],
-                        [<Self as limen_core::graph::GraphNodeTypes<#i, {#in_ports}, {#out_ports}>>::OutQ; {#out_ports}],
-                        [limen_core::policy::EdgePolicy; {#in_ports}],
-                        [limen_core::policy::EdgePolicy; {#out_ports}],
+                        [<Self as limen_core::graph::GraphNodeTypes<#i, #in_ports, #out_ports>>::InQ; #in_ports],
+                        [<Self as limen_core::graph::GraphNodeTypes<#i, #in_ports, #out_ports>>::OutQ; #out_ports],
+                        [limen_core::policy::EdgePolicy; #in_ports],
+                        [limen_core::policy::EdgePolicy; #out_ports],
                     ) {
                         let node = self.nodes.#iidx.take().expect("node already taken");
                         ( node, [ #( #in_ret ),* ], [ #( #out_ret ),* ], [ #( #in_pols ),* ], [ #( #out_pols ),* ] )
@@ -1871,8 +1907,8 @@ impl<'a> Std<'a> {
                     fn put_node_and_endpoints(
                         &mut self,
                         node: Self::NodeOwned,
-                        inputs: [<Self as limen_core::graph::GraphNodeTypes<#i, {#in_ports}, {#out_ports}>>::InQ; {#in_ports}],
-                        outputs: [<Self as limen_core::graph::GraphNodeTypes<#i, {#in_ports}, {#out_ports}>>::OutQ; {#out_ports}],
+                        inputs: [<Self as limen_core::graph::GraphNodeTypes<#i, #in_ports, #out_ports>>::InQ; #in_ports],
+                        outputs: [<Self as limen_core::graph::GraphNodeTypes<#i, #in_ports, #out_ports>>::OutQ; #out_ports],
                     ) {
                         assert!(self.nodes.#iidx.is_none(), "node already present");
                         self.nodes.#iidx = core::option::Option::Some(node);

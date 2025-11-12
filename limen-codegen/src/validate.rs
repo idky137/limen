@@ -141,5 +141,19 @@ pub fn validate_definition(g: &GraphDef) -> Result<(), String> {
         }
     }
 
+    // --- Ingress policy requirement for source nodes ---
+    // Project invariant: every source node (in_ports == 0 && out_ports > 0)
+    // must expose an external ingress link, which is configured via `ingress_policy`.
+    // Enforce this explicitly so that codegen can assume it is always present.
+    for n in &g.nodes {
+        let is_source = n.in_ports == 0 && n.out_ports > 0;
+        if is_source && n.ingress_policy_opt.is_none() {
+            return Err(format!(
+                "source node {} must declare `ingress_policy` to expose external ingress",
+                n.idx
+            ));
+        }
+    }
+
     Ok(())
 }

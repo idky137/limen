@@ -210,12 +210,16 @@
 //! - [`expand_str_to_tokens`]: parse+validate+emit from a `&str` DSL (for build scripts or tests).
 //! - [`expand_str_to_string`]: same as above, but pretty-prints to a Rust source string.
 //! - [`expand_str_to_file`]: same as above, writes to a path (creating parent directories if needed).
+//! - [`expand_ast_to_tokens`], [`expand_ast_to_file`]: like the above, but take a typed AST
+//!   (for use with the new `builder` module so you can write graphs as normal Rust).
 //!
 //! All entry points perform **validation** before emitting code. Errors are returned as
 //! [`CodegenError`], with precise messages for parsing, validation, pretty-print, or I/O failures.
 
 /// Internal: Abstract syntax tree for the DSL (consumed by parsing, validation, and emission).
 mod ast;
+/// Optional: typed, LS-friendly graph builder (no proc-macro, no big strings).
+pub mod builder;
 /// Internal: Code emission — turns a validated AST into a `TokenStream` of Rust code.
 mod gen;
 /// Internal: DSL parser — converts the `define_graph!` body (or a string) into an AST.
@@ -224,10 +228,7 @@ mod parse;
 mod validate;
 
 use proc_macro2::TokenStream as TokenStream2;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 /// Errors that can occur while expanding the graph DSL into Rust code.
 #[derive(thiserror::Error, Debug)]
@@ -248,6 +249,34 @@ pub enum CodegenError {
     /// Pretty-printing (token → formatted Rust source) failed.
     #[error("prettyprint failed: {0}")]
     Pretty(String),
+}
+
+/// Expand a *typed* AST into code tokens.
+pub fn expand_ast_to_tokens(g: ast::GraphDef) -> Result<TokenStream2, CodegenError> {
+    validate::validate_definition(&g).map_err(CodegenError::Validate)?;
+    Ok(gen::emit(&g))
+}
+
+/// Try to pretty-print tokens; if that fails, fall back to raw `.to_string()`.
+fn tokens_to_string_pretty_or_raw(tokens: &TokenStream2) -> String {
+    match syn::parse2::<syn::File>(tokens.clone()) {
+        Ok(file) => prettyplease::unparse(&file),
+        Err(_) => tokens.to_string(),
+    }
+}
+
+/// Write tokens to a file, preferring pretty-printing with fallback to raw.
+pub fn write_tokens_pretty_or_raw<P: AsRef<std::path::Path>>(
+    tokens: &TokenStream2,
+    dest: P,
+) -> Result<std::path::PathBuf, CodegenError> {
+    let s = tokens_to_string_pretty_or_raw(tokens);
+    let p = dest.as_ref().to_path_buf();
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&p, s)?;
+    Ok(p)
 }
 
 /// Parse, validate, and emit Rust code from a proc-macro input token stream,
@@ -316,8 +345,7 @@ pub fn expand_str_to_tokens(spec: &str) -> Result<TokenStream2, CodegenError> {
 /// - [`CodegenError::Pretty`] if formatting the generated tokens as a Rust file fails.
 pub fn expand_str_to_string(spec: &str) -> Result<String, CodegenError> {
     let tokens = expand_str_to_tokens(spec)?;
-    let file = syn::parse2::<syn::File>(tokens).map_err(|e| CodegenError::Pretty(e.to_string()))?;
-    Ok(prettyplease::unparse(&file))
+    Ok(tokens_to_string_pretty_or_raw(&tokens))
 }
 
 /// Parse, validate, emit, pretty-print, and **write** the Rust code for a DSL string to `dest`,
@@ -341,11 +369,15 @@ pub fn expand_str_to_string(spec: &str) -> Result<String, CodegenError> {
 /// - [`CodegenError::Pretty`] if formatting the generated tokens as a Rust file fails.
 /// - [`CodegenError::Io`] if filesystem operations fail (for example, permission denied).
 pub fn expand_str_to_file<P: AsRef<Path>>(spec: &str, dest: P) -> Result<PathBuf, CodegenError> {
-    let s = expand_str_to_string(spec)?;
-    let p = dest.as_ref().to_path_buf();
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&p, s)?;
-    Ok(p)
+    let tokens = expand_str_to_tokens(spec)?;
+    write_tokens_pretty_or_raw(&tokens, dest)
+}
+
+/// Expand a *typed* AST and write it to a file (pretty-or-raw fallback).
+pub fn expand_ast_to_file<P: AsRef<Path>>(
+    g: ast::GraphDef,
+    dest: P,
+) -> Result<PathBuf, CodegenError> {
+    let tokens = expand_ast_to_tokens(g)?;
+    write_tokens_pretty_or_raw(&tokens, dest)
 }
