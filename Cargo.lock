@@ -71,7 +71,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "limen-examples"
+name = "limen-integration-tests"
 version = "0.1.0"
 dependencies = [
  "limen-build",

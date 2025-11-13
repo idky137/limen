@@ -20,7 +20,7 @@ fn main() {
     };
 
     // Build a typed AST for the graph
-    let ast = GraphBuilder::new(parse_quote!(pub), parse_quote!(BuildGraphA))
+    let ast = GraphBuilder::new(parse_quote!(pub), parse_quote!(SimpleExampleGraph))
         .node(
             Node::new(0)
                 .ty(parse_quote!(
@@ -56,7 +56,7 @@ fn main() {
         .edge(
             Edge::new(0)
                 .ty(parse_quote!(
-                    limen_core::edge::spsc_ringbuf::SpscRingbuf<limen_core::message::Message<u32>>
+                    limen_core::edge::bench::TestSpscRingBuf<limen_core::message::Message<u32>, 8>
                 ))
                 .payload(parse_quote!(u32))
                 .from(0, 0)
@@ -67,7 +67,7 @@ fn main() {
         .edge(
             Edge::new(1)
                 .ty(parse_quote!(
-                    limen_core::edge::spsc_ringbuf::SpscRingbuf<limen_core::message::Message<u32>>
+                    limen_core::edge::bench::TestSpscRingBuf<limen_core::message::Message<u32>, 8>
                 ))
                 .payload(parse_quote!(u32))
                 .from(1, 0)
@@ -81,7 +81,7 @@ fn main() {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
     let dest_dir = std::path::Path::new(&out_dir).join("generated");
     std::fs::create_dir_all(&dest_dir).expect("create $OUT_DIR/generated");
-    let dest = dest_dir.join("build_graph_a.rs");
+    let dest = dest_dir.join("simple_example_graph.rs");
     limen_codegen::expand_ast_to_file(ast, &dest).expect("codegen failed");
 
     println!("cargo:rerun-if-changed=build.rs");

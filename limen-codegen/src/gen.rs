@@ -817,19 +817,26 @@ impl<'a> NonStd<'a> {
                 }
 
                 // Provide the OwnedBundle API unconditionally so GraphApi is fully implemented.
+                #[cfg(feature = "std")]
                 type OwnedBundle = ();
+
+                #[cfg(feature = "std")]
                 #[inline]
                 fn take_owned_bundle_by_index(&mut self, _index: usize)
                     -> Result<Self::OwnedBundle, limen_core::errors::GraphError>
                 {
                     Err(limen_core::errors::GraphError::InvalidEdgeIndex)
                 }
+
+                #[cfg(feature = "std")]
                 #[inline]
                 fn put_owned_bundle_by_index(&mut self, _bundle: Self::OwnedBundle)
                     -> Result<(), limen_core::errors::GraphError>
                 {
                     Err(limen_core::errors::GraphError::InvalidEdgeIndex)
                 }
+
+                #[cfg(feature = "std")]
                 #[inline]
                 fn step_owned_bundle<C, T>(
                     _bundle: &mut Self::OwnedBundle,

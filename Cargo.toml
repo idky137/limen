@@ -10,7 +10,7 @@ members = [
     "limen-sensors",
     "limen-output",
     "limen-platform",
-    "limen-examples",
+    "integration-tests",
 ]
 
 resolver = "2"
