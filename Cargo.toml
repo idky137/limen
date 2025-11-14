@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "limen-core",
+    "limen-codegen",
+    "limen-build",
     "limen-light",
     "limen",
     "limen-processing",
@@ -8,7 +10,7 @@ members = [
     "limen-sensors",
     "limen-output",
     "limen-platform",
-    "limen-examples",
+    "integration-tests",
 ]
 
 resolver = "2"

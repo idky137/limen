@@ -1,0 +1,16 @@
+[package]
+name = "limen-codegen"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Reusable code generator for Limen graphs (proc-macro and build.rs compatible)"
+repository = "https://example.invalid/limen"
+
+[dependencies]
+limen-core = { path = "../limen-core" }
+
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "parsing"] }
+prettyplease = "0.2"
+thiserror = "1"
