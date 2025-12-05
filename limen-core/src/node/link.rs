@@ -182,9 +182,9 @@ where
     }
 
     #[inline]
-    fn step<InQ, OutQ, C, T>(
+    fn step<'graph, 'telemetry, 'clock, InQ, OutQ, C, T>(
         &mut self,
-        ctx: &mut StepContext<IN, OUT, InP, OutP, InQ, OutQ, C, T>,
+        ctx: &mut StepContext<'graph, 'telemetry, 'clock, IN, OUT, InP, OutP, InQ, OutQ, C, T>,
     ) -> Result<StepResult, NodeError>
     where
         InQ: Edge<Item = Message<InP>>,

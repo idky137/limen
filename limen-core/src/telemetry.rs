@@ -7,7 +7,6 @@
 pub mod event_message;
 pub mod graph_telemetry;
 pub mod sink;
-use sink::*;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -15,8 +14,9 @@ extern crate alloc;
 use core::fmt;
 
 use crate::policy::WatermarkState;
-use crate::prelude::event_message::EventMessage;
 use crate::types::{EdgeIndex, NodeIndex};
+use event_message::EventMessage;
+use sink::write_u64;
 
 // ====================== Core telemetry trait and keys ===================
 
@@ -26,6 +26,21 @@ use crate::types::{EdgeIndex, NodeIndex};
 /// implemented in both no_std and std environments. Implementations are free to
 /// ignore any subset of calls.
 pub trait Telemetry {
+    /// Compile-time flag indicating whether this telemetry implementation
+    /// wants metrics (counters, gauges, latencies) at all.
+    ///
+    /// Runtimes can use this to completely compile out metric collection
+    /// when `METRICS_ENABLED` is `false` for a given `Telemetry` type.
+    const METRICS_ENABLED: bool = true;
+
+    /// Compile-time flag indicating whether this telemetry implementation
+    /// ever produces structured events.
+    ///
+    /// When this is `false`, runtimes can skip both the construction of
+    /// `TelemetryEvent` values and any calls to `events_enabled()`,
+    /// allowing event handling code to compile out entirely.
+    const EVENTS_STATICALLY_ENABLED: bool = true;
+
     /// Increment a counter metric identified by the given key.
     ///
     /// Counters are monotonically increasing and are typically used for counts such
@@ -51,6 +66,15 @@ pub trait Telemetry {
     /// default no-op.
     #[inline]
     fn push_metrics(&mut self) {}
+
+    /// Return true if this telemetry collector wants structured events.
+    ///
+    /// Runtimes and nodes can use this to avoid constructing `TelemetryEvent`
+    /// values when events are disabled, keeping the hot path as cheap as possible.
+    #[inline]
+    fn events_enabled(&self) -> bool {
+        false
+    }
 
     /// Emit a structured telemetry event.
     ///
@@ -181,24 +205,23 @@ pub enum TelemetryKind {
 /// same runtime.
 pub type GraphInstanceId = u32;
 
-/// High level classification of a node level error.
+/// High level classification of a node level error used in telemetry.
 ///
-/// This is carried in structured node events so that downstream consumers can
-/// aggregate error causes without parsing messages.
+/// This mirrors `crate::errors::NodeErrorKind` so that telemetry can
+/// faithfully report the scheduler-visible error semantics without
+/// inventing additional information that is not available at this layer.
 #[derive(Copy, Clone, Debug)]
-pub enum NodeErrorKind {
-    /// Error originating from a sensor or input source.
-    SensorError,
-    /// Error in preprocessing before the model is invoked.
-    PreprocessingError,
-    /// Error inside the model backend during inference.
-    ModelError,
-    /// Error in postprocessing after the model has produced an output.
-    PostprocessingError,
-    /// Error in a sink or output handler.
-    SinkError,
-    /// The node exceeded its deadline.
-    DeadlineExceeded,
+pub enum NodeStepError {
+    /// Inputs were not available to progress this node.
+    NoInput,
+    /// Outputs could not be enqueued due to backpressure.
+    Backpressured,
+    /// An execution budget or deadline was exceeded.
+    OverBudget,
+    /// External dependency (device, transport) was unavailable or timed out.
+    ExternalUnavailable,
+    /// A generic failure in node logic.
+    ExecutionFailed,
 }
 
 /// Structured telemetry produced for each node step.
@@ -221,20 +244,13 @@ pub struct NodeStepTelemetry {
     /// Duration of the step in nanoseconds.
     pub duration_ns: u64,
 
-    /// Number of input messages consumed during this step.
-    pub input_message_count: u32,
-    /// Number of output messages produced during this step.
-    pub output_message_count: u32,
-    /// Number of messages dropped during this step.
-    pub dropped_message_count: u32,
-
     /// Optional absolute deadline in nanoseconds for this step.
     pub deadline_ns: Option<u64>,
     /// Whether the deadline was missed during this step.
     pub deadline_missed: bool,
 
     /// Optional high level error classification for this step.
-    pub error_kind: Option<NodeErrorKind>,
+    pub error_kind: Option<NodeStepError>,
 }
 
 /// Structured snapshot describing the state of a single edge.
@@ -477,6 +493,9 @@ impl<const MAX_NODES: usize, const MAX_EDGES: usize> GraphMetrics<MAX_NODES, MAX
 pub struct NoopTelemetry;
 
 impl Telemetry for NoopTelemetry {
+    const METRICS_ENABLED: bool = false;
+    const EVENTS_STATICALLY_ENABLED: bool = false;
+
     #[inline]
     fn incr_counter(&mut self, _key: TelemetryKey, _delta: u64) {}
     #[inline]
@@ -486,6 +505,9 @@ impl Telemetry for NoopTelemetry {
 }
 
 impl Telemetry for () {
+    const METRICS_ENABLED: bool = false;
+    const EVENTS_STATICALLY_ENABLED: bool = false;
+
     #[inline]
     fn incr_counter(&mut self, _key: TelemetryKey, _delta: u64) {}
 

@@ -30,7 +30,7 @@ use crate::{
         source::{Source as _, SourceNode, EXTERNAL_INGRESS_NODE},
         Node as _, StepContext, StepResult,
     },
-    policy::EdgePolicy,
+    policy::{EdgePolicy, NodePolicy},
     prelude::{EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink, PlatformClock, Telemetry},
     types::{EdgeIndex, NodeIndex, PortId, PortIndex},
 };
@@ -154,6 +154,20 @@ impl GraphApi<3, 3> for TestPipeline {
             self.edges.0.descriptor(),
             self.edges.1.descriptor(),
         ]
+    }
+
+    #[inline]
+    fn get_node_policies(&self) -> [NodePolicy; 3] {
+        [
+            self.nodes.0.policy(),
+            self.nodes.1.policy(),
+            self.nodes.2.policy(),
+        ]
+    }
+
+    #[inline]
+    fn get_edge_policies(&self) -> [EdgePolicy; 3] {
+        [INGRESS_POLICY, self.edges.0.policy(), self.edges.1.policy()]
     }
 
     #[inline]
@@ -796,8 +810,10 @@ pub mod concurrent_graph {
         ingress_edges: [ConcurrentIngressEdgeLink<u32>; 1],
         // One updater per source; moved to that source worker; kept as Option so we can take().
         ingress_updaters: [Option<SourceIngressUpdater>; 1],
-        // Cache node descriptors so validation still works after nodes are moved out
+        // Cache node descriptors so validation still works after nodes are moved out.
         node_descs: [NodeDescriptor; 3],
+        // Cache node policies so get_node_policies still works after nodes are moved out.
+        node_policies: [NodePolicy; 3],
     }
 
     impl TestPipelineStd {
@@ -814,23 +830,34 @@ pub mod concurrent_graph {
             let node_0: SrcNode = node_0.into();
             let node_2: SnkNode = node_2.into();
 
-            let nodes = (
-                Some(NodeLink::<SrcNode, 0, 1, (), u32>::new(
-                    node_0,
-                    NodeIndex::from(0usize),
-                    Some("src"),
-                )),
-                Some(NodeLink::<MapNode, 1, 1, u32, u32>::new(
-                    node_1,
-                    NodeIndex::from(1usize),
-                    Some("map"),
-                )),
-                Some(NodeLink::<SnkNode, 1, 0, u32, ()>::new(
-                    node_2,
-                    NodeIndex::from(2usize),
-                    Some("snk"),
-                )),
+            let node_0_link = NodeLink::<SrcNode, 0, 1, (), u32>::new(
+                node_0,
+                NodeIndex::from(0usize),
+                Some("src"),
             );
+            let node_1_link = NodeLink::<MapNode, 1, 1, u32, u32>::new(
+                node_1,
+                NodeIndex::from(1usize),
+                Some("map"),
+            );
+            let node_2_link = NodeLink::<SnkNode, 1, 0, u32, ()>::new(
+                node_2,
+                NodeIndex::from(2usize),
+                Some("snk"),
+            );
+
+            let node_descs = [
+                node_0_link.descriptor(),
+                node_1_link.descriptor(),
+                node_2_link.descriptor(),
+            ];
+            let node_policies = [
+                node_0_link.policy(),
+                node_1_link.policy(),
+                node_2_link.policy(),
+            ];
+
+            let nodes = (Some(node_0_link), Some(node_1_link), Some(node_2_link));
 
             // Build edges
             let e0 = ConcurrentEdgeLink::<Q32, u32>::new(
@@ -897,12 +924,6 @@ pub mod concurrent_graph {
             let ingress_edges = [ingress_edge_0];
             let ingress_updaters = [Some(updater_0)];
 
-            let node_descs = [
-                nodes.0.as_ref().unwrap().descriptor(),
-                nodes.1.as_ref().unwrap().descriptor(),
-                nodes.2.as_ref().unwrap().descriptor(),
-            ];
-
             Self {
                 nodes,
                 edges: (e0, e1),
@@ -910,6 +931,7 @@ pub mod concurrent_graph {
                 ingress_edges,
                 ingress_updaters,
                 node_descs,
+                node_policies,
             }
         }
     }
@@ -957,12 +979,27 @@ pub mod concurrent_graph {
         fn get_node_descriptors(&self) -> [NodeDescriptor; 3] {
             self.node_descs.clone()
         }
+
         #[inline]
         fn get_edge_descriptors(&self) -> [EdgeDescriptor; 3] {
             [
                 self.ingress_edges[0].descriptor(),
                 self.edges.0.descriptor(),
                 self.edges.1.descriptor(),
+            ]
+        }
+
+        #[inline]
+        fn get_node_policies(&self) -> [NodePolicy; 3] {
+            self.node_policies
+        }
+
+        #[inline]
+        fn get_edge_policies(&self) -> [EdgePolicy; 3] {
+            [
+                INGRESS_POLICIES[0],
+                self.edges.0.policy(),
+                self.edges.1.policy(),
             ]
         }
 

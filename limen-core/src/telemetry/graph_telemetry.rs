@@ -1,5 +1,7 @@
 //! Basic graph level telemetry implementation,
 
+use crate::prelude::sink::TelemetrySink;
+
 use super::*;
 
 /// Fixed size telemetry collector backed by arrays.
@@ -101,6 +103,9 @@ impl<const MAX_NODES: usize, const MAX_EDGES: usize, Writer: TelemetrySink>
 }
 
 impl<const N: usize, const E: usize, W: TelemetrySink> Telemetry for GraphTelemetry<N, E, W> {
+    const METRICS_ENABLED: bool = true;
+    const EVENTS_STATICALLY_ENABLED: bool = true;
+
     #[inline]
     fn incr_counter(&mut self, key: TelemetryKey, delta: u64) {
         match (key.ns, key.kind) {
@@ -162,6 +167,15 @@ impl<const N: usize, const E: usize, W: TelemetrySink> Telemetry for GraphTeleme
     #[inline]
     fn push_metrics(&mut self) {
         let _ = self.writer.push_metrics(&self.metrics);
+    }
+
+    /// Return true if this telemetry collector wants structured events.
+    ///
+    /// Runtimes and nodes can use this to avoid constructing `TelemetryEvent`
+    /// values when events are disabled, keeping the hot path as cheap as possible.
+    #[inline]
+    fn events_enabled(&self) -> bool {
+        self.events
     }
 
     #[inline]

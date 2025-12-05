@@ -129,12 +129,6 @@ pub fn fmt_event<W: fmt::Write>(w: &mut W, e: &TelemetryEvent) -> fmt::Result {
             write_u64(w, ev.timestamp_end_ns)?;
             w.write_str(" dur=")?;
             write_u64(w, ev.duration_ns)?;
-            w.write_str(" in=")?;
-            write_u64(w, ev.input_message_count as u64)?;
-            w.write_str(" out=")?;
-            write_u64(w, ev.output_message_count as u64)?;
-            w.write_str(" drop=")?;
-            write_u64(w, ev.dropped_message_count as u64)?;
             w.write_str(" dl=")?;
             if let Some(d) = ev.deadline_ns {
                 write_u64(w, d)?;
@@ -146,12 +140,11 @@ pub fn fmt_event<W: fmt::Write>(w: &mut W, e: &TelemetryEvent) -> fmt::Result {
             w.write_str(" err=")?;
             if let Some(k) = ev.error_kind {
                 w.write_str(match k {
-                    NodeErrorKind::SensorError => "SensorError",
-                    NodeErrorKind::PreprocessingError => "PreprocessingError",
-                    NodeErrorKind::ModelError => "ModelError",
-                    NodeErrorKind::PostprocessingError => "PostprocessingError",
-                    NodeErrorKind::SinkError => "SinkError",
-                    NodeErrorKind::DeadlineExceeded => "DeadlineExceeded",
+                    NodeStepError::NoInput => "NoInput",
+                    NodeStepError::Backpressured => "BackPressured",
+                    NodeStepError::OverBudget => "OverBudget",
+                    NodeStepError::ExternalUnavailable => "ExternalUnavailable",
+                    NodeStepError::ExecutionFailed => "ExecutionFailed",
                 })?;
             } else {
                 w.write_str("-")?;
