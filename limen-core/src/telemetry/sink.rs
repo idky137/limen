@@ -208,6 +208,80 @@ impl<W: fmt::Write + Clone> Clone for FmtLineWriter<W> {
     }
 }
 
+/// Fixed-size, owned buffer implementing `core::fmt::Write`.
+///
+/// - Completely no_std and allocation-free.
+/// - Capacity is a const generic `N`.
+/// - On overflow, `write_str` returns `Err(fmt::Error)` (no partial writes).
+pub struct FixedBuffer<const N: usize> {
+    buffer: [u8; N],
+    length: usize,
+}
+
+impl<const N: usize> FixedBuffer<N> {
+    /// Create a new empty buffer.
+    pub const fn new() -> Self {
+        Self {
+            buffer: [0u8; N],
+            length: 0,
+        }
+    }
+
+    /// Maximum capacity in bytes.
+    #[inline]
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+
+    /// Number of bytes currently written.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    /// Access the written portion as bytes.
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buffer[..self.length]
+    }
+
+    /// Access the written portion as `&str`.
+    ///
+    /// Panics if the contents are not valid UTF-8, which is fine for telemetry
+    /// because we only ever write ASCII.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(self.as_bytes()).unwrap()
+    }
+
+    /// Clear the buffer without reallocating.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.length = 0;
+    }
+}
+
+impl<const N: usize> fmt::Write for FixedBuffer<N> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let bytes = s.as_bytes();
+        if self.length + bytes.len() > N {
+            return Err(fmt::Error);
+        }
+        let start = self.length;
+        let end = start + bytes.len();
+        self.buffer[start..end].copy_from_slice(bytes);
+        self.length = end;
+        Ok(())
+    }
+}
+
+/// Convenience constructor for a line writer over a fixed owned buffer.
+///
+/// This is pure no_std: no heap, no std::io.
+pub fn fixed_buffer_line_writer<const N: usize>() -> FmtLineWriter<FixedBuffer<N>> {
+    FmtLineWriter::new(FixedBuffer::<N>::new())
+}
+
 // ---- std sink ----
 
 #[cfg(feature = "std")]
@@ -260,6 +334,17 @@ impl<W: std::io::Write> IoLineWriter<W> {
     pub fn new(writer: W) -> Self {
         Self { inner: writer }
     }
+
+    /// Create an `IoLineWriter` that writes telemetry lines to `stdout`.
+    pub fn stdout_writer() -> IoLineWriter<std::io::Stdout> {
+        IoLineWriter::new(std::io::stdout())
+    }
+
+    /// Create an `IoLineWriter` that writes telemetry lines to a file at `path`.
+    pub fn file_writer(path: &str) -> std::io::Result<IoLineWriter<std::fs::File>> {
+        let file = std::fs::File::create(path)?;
+        Ok(IoLineWriter::new(file))
+    }
 }
 
 #[cfg(feature = "std")]
@@ -268,10 +353,17 @@ impl<W: std::io::Write> TelemetrySink for IoLineWriter<W> {
         let mut buffer = [0u8; 256];
         let mut writer = BufWriter::new(&mut buffer);
 
-        fmt_event(&mut writer, event).map_err(|_| TelemetrySinkError::PushFailed)?;
-        self.inner
-            .write_all(writer.as_slice())
-            .map_err(|_| TelemetrySinkError::PushFailed)
+        if fmt_event(&mut writer, event).is_err() {
+            let mut heap_buffer = String::new();
+            fmt_event(&mut heap_buffer, event).map_err(|_| TelemetrySinkError::PushFailed)?;
+            self.inner
+                .write_all(heap_buffer.as_bytes())
+                .map_err(|_| TelemetrySinkError::PushFailed)
+        } else {
+            self.inner
+                .write_all(writer.as_slice())
+                .map_err(|_| TelemetrySinkError::PushFailed)
+        }
     }
 
     fn push_metrics<const MAX_NODES: usize, const MAX_EDGES: usize>(
@@ -282,12 +374,12 @@ impl<W: std::io::Write> TelemetrySink for IoLineWriter<W> {
         let mut writer = BufWriter::new(&mut buffer);
 
         if graph.fmt(&mut writer).is_err() {
-            let mut buffer = String::new();
+            let mut heap_buffer = String::new();
             graph
-                .fmt(&mut buffer)
+                .fmt(&mut heap_buffer)
                 .map_err(|_| TelemetrySinkError::PushFailed)?;
             self.inner
-                .write_all(buffer.as_bytes())
+                .write_all(heap_buffer.as_bytes())
                 .map_err(|_| TelemetrySinkError::PushFailed)
         } else {
             self.inner

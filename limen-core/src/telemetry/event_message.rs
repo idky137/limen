@@ -61,12 +61,17 @@
 /// ## Compile-time validated constant
 ///
 /// ```rust
+/// use limen_core::prelude::event_message::EventMessage;
+///
 /// const HELLO: EventMessage = EventMessage::new("hello");
 /// ```
 ///
 /// ## Preferable usage: enforced via `event_message!`
 ///
 /// ```rust
+/// use limen_core::prelude::event_message::EventMessage;
+/// use limen_core::event_message;
+///
 /// let msg: EventMessage = event_message!("system_ready");
 /// println!("{}", msg.as_str());
 /// ```
@@ -74,11 +79,19 @@
 /// Attempting to use invalid strings results in a **compile-time error**:
 ///
 /// ```rust,compile_fail
+/// use limen_core::prelude::event_message::EventMessage;
+///
 /// const BAD: EventMessage = EventMessage::new("line1\nline2"); // contains newline
 /// ```
 ///
 /// ```rust,compile_fail
-/// const TOO_LONG: EventMessage = EventMessage::new("a string exceeding the allowed length ...");
+/// use limen_core::prelude::event_message::EventMessage;
+///
+/// const too_long = EventMessage::new(
+///     "12345678901234567890123456789012345678901234567890\
+///12345678901234567890123456789012345678901234567890\
+///123456789012345678901234567890"
+/// );
 /// ```
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug)]
@@ -166,6 +179,9 @@ impl EventMessage {
 /// # Examples
 ///
 /// ```rust
+/// use limen_core::prelude::event_message::EventMessage;
+/// use limen_core::event_message;
+///
 /// let msg = event_message!("startup_complete");
 /// println!("{}", msg.as_str());
 /// ```
@@ -173,16 +189,27 @@ impl EventMessage {
 /// Invalid messages cause **compile-time errors**:
 ///
 /// ```rust,compile_fail
+/// use limen_core::prelude::event_message::EventMessage;
+/// use limen_core::event_message;
+///
 /// let bad = event_message!("line1\nline2");
 /// ```
 ///
 /// ```rust,compile_fail
-/// let too_long = event_message!("a very long string exceeding the maximum allowed length ...");
+/// use limen_core::prelude::event_message::EventMessage;
+/// use limen_core::event_message;
+///
+/// let too_long = event_message!(
+///     "12345678901234567890123456789012345678901234567890\
+///12345678901234567890123456789012345678901234567890\
+///123456789012345678901234567890"
+/// );
 /// ```
 #[macro_export]
 macro_rules! event_message {
     ($s:expr) => {{
-        const MSG: $crate::EventMessage = $crate::EventMessage::new($s);
+        const MSG: $crate::telemetry::event_message::EventMessage =
+            $crate::telemetry::event_message::EventMessage::new($s);
         MSG
     }};
 }
