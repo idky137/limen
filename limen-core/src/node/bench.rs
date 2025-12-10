@@ -17,6 +17,52 @@ use crate::node::source::probe::{SourceIngressProbe, SourceIngressUpdater};
 
 use core::fmt::Write;
 
+/// Busy-waits for a pseudo random duration up to `max_delay_microseconds` microseconds.
+///
+/// # Input
+/// * `random_state`: mutable pseudo random number generator state; any `u32` value is accepted.
+///   If it is zero, it will be internally changed to one to avoid the all-zero XorShift32 state.
+/// * `max_delay_microseconds`: maximum delay in microseconds; if zero, this function returns immediately.
+fn random_test_node_delay(random_state: &mut u32, max_delay_microseconds: u32) {
+    // No delay requested.
+    if max_delay_microseconds == 0 {
+        return;
+    }
+
+    // XorShift32 step (simple pseudo random number generator)
+    if *random_state == 0 {
+        *random_state = 1;
+    }
+    let mut current_state = *random_state;
+    current_state ^= current_state << 13;
+    current_state ^= current_state >> 17;
+    current_state ^= current_state << 5;
+    *random_state = current_state;
+
+    // Random delay in "microseconds": 1..=max_delay_microseconds
+    let delay_microseconds = (current_state % max_delay_microseconds) + 1;
+
+    // Rough timing model for a laptop-class central processing unit.
+    let assumed_cpu_frequency_hertz: u32 = 2_000_000_000; // two gigahertz
+    let estimated_cpu_cycles_per_loop_iteration: u32 = 8;
+
+    // At two gigahertz there are two thousand cycles per microsecond.
+    let cycles_per_microsecond = assumed_cpu_frequency_hertz / 1_000_000;
+
+    // Convert cycles per microsecond into loop iterations per microsecond.
+    let mut iterations_per_microsecond =
+        cycles_per_microsecond / estimated_cpu_cycles_per_loop_iteration;
+    if iterations_per_microsecond == 0 {
+        iterations_per_microsecond = 1;
+    }
+
+    let total_iterations = delay_microseconds.saturating_mul(iterations_per_microsecond);
+
+    for _iteration in 0..total_iterations {
+        core::hint::spin_loop();
+    }
+}
+
 // -----------------------------------------------------------------------------
 // TestSourceNodeU32: 0 inputs, 1 output (u32 payload), emits incrementing values
 // -----------------------------------------------------------------------------
@@ -167,6 +213,17 @@ where
 
     #[inline]
     fn try_produce(&mut self) -> Option<(usize, Message<u32>)> {
+        #[cfg(feature = "std")]
+        let mut random_seed: u32 = {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|e| e.duration());
+            (now.as_nanos() & 0xFFFF_FFFF) as u32
+        };
+        #[cfg(not(feature = "std"))]
+        let mut random_seed = 1;
+        random_test_node_delay(&mut random_seed, 250);
+
         // Produce one message on port 0.
         let header = self.make_header();
         let msg = Message::new(header, self.next_value_to_emit);
@@ -227,12 +284,34 @@ impl ComputeModel<u32, u32> for TestU32Model {
 
     #[inline]
     fn infer_one(&mut self, inp: &u32, out: &mut u32) -> Result<(), InferenceError> {
+        #[cfg(feature = "std")]
+        let mut random_seed: u32 = {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|e| e.duration());
+            (now.as_nanos() & 0xFFFF_FFFF) as u32
+        };
+        #[cfg(not(feature = "std"))]
+        let mut random_seed = 1;
+        random_test_node_delay(&mut random_seed, 500);
+
         *out = *inp;
         Ok(())
     }
 
     #[inline]
     fn infer_batch(&mut self, inputs: &[u32], outputs: &mut [u32]) -> Result<(), InferenceError> {
+        #[cfg(feature = "std")]
+        let mut random_seed: u32 = {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|e| e.duration());
+            (now.as_nanos() & 0xFFFF_FFFF) as u32
+        };
+        #[cfg(not(feature = "std"))]
+        let mut random_seed = 1;
+        random_test_node_delay(&mut random_seed, 1000);
+
         if outputs.len() < inputs.len() {
             return Err(InferenceError::new(InferenceErrorKind::ExecutionFailed, 0));
         }
@@ -397,6 +476,17 @@ impl Sink<u32, 1> for TestSinkNodeU32_2 {
 
     #[inline]
     fn consume(&mut self, _port: usize, msg: Message<u32>) -> Result<(), Self::Error> {
+        #[cfg(feature = "std")]
+        let mut random_seed: u32 = {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|e| e.duration());
+            (now.as_nanos() & 0xFFFF_FFFF) as u32
+        };
+        #[cfg(not(feature = "std"))]
+        let mut random_seed = 1;
+        random_test_node_delay(&mut random_seed, 100);
+
         let mut buf: FixedBuf<256> = FixedBuf::new();
         let _ = core::write!(&mut buf, "{:?}", msg);
         (self.printer)(buf.as_str());
