@@ -9,15 +9,18 @@ use limen_core::node::NodeCapabilities;
 use limen_core::policy::{
     BatchingPolicy, BudgetPolicy, DeadlinePolicy, NodePolicy, WatermarkState,
 };
-use limen_core::prelude::{NoopClock, NoopTelemetry};
+use limen_core::prelude::linux::NoStdLinuxMonotonicClock;
+use limen_core::prelude::NoopTelemetry;
 use limen_core::runtime::LimenRuntime;
-use limen_core::types::{QoSClass, SequenceNumber, Ticks, TraceId};
+use limen_core::types::{QoSClass, SequenceNumber, TraceId};
 
 // Concrete queue type used by the test pipelines (matches your bench graphs)
 type Q32 = limen_core::edge::bench::TestSpscRingBuf<Message<u32>, 8>;
 
 const TEST_MAX_BATCH: usize = 32;
 type MapNode = TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
+
+type NoStdTestClock = NoStdLinuxMonotonicClock;
 
 // ----------------------------------------------------------------------
 // std (concurrent) pipeline + std test runtime (one worker thread/node)
@@ -45,12 +48,15 @@ fn std_pipeline_runs_with_std_runtime() {
         },
     };
 
+    // clock
+    let clock = NoStdLinuxMonotonicClock::new();
+
     // nodes
     let src = TestCounterSourceU32_2::new(
+        clock,
         0,
         TraceId(0u64),
         SequenceNumber(0u64),
-        Ticks(0u64),
         None,
         QoSClass::BestEffort,
         MessageFlags::empty(),
@@ -112,10 +118,10 @@ fn std_pipeline_runs_with_std_runtime() {
     let mut graph = TestPipelineStd::new(src, map, snk, q0, q1);
 
     // runtime
-    let mut runtime: TestStdRuntime<NoopClock, NoopTelemetry, 3, 3> = TestStdRuntime::new();
+    let mut runtime: TestStdRuntime<NoStdTestClock, NoopTelemetry, 3, 3> = TestStdRuntime::new();
 
     // init (moves bundles to worker threads)
-    runtime.init(&mut graph, NoopClock, NoopTelemetry).unwrap();
+    runtime.init(&mut graph, clock, NoopTelemetry).unwrap();
 
     // graph remains valid (descriptors intact)
     graph.validate_graph().unwrap();
@@ -126,8 +132,8 @@ fn std_pipeline_runs_with_std_runtime() {
         #[cfg(feature = "std")]
         println!(
             "--- [graph_occupancies] --- {:?}",
-            <TestStdRuntime<NoopClock, NoopTelemetry, 3, 3> as limen_core::runtime::LimenRuntime<
-                limen_core::graph::bench::TestPipeline,
+            <TestStdRuntime<NoStdTestClock, NoopTelemetry, 3, 3> as limen_core::runtime::LimenRuntime<
+                limen_core::graph::bench::TestPipeline<NoStdTestClock>,
                 3,
                 3,
             >>::occupancies(&runtime)
@@ -136,12 +142,12 @@ fn std_pipeline_runs_with_std_runtime() {
 
     // request stop and run one final step to reattach bundles
     <limen_core::runtime::bench::concurrent_runtime::TestStdRuntime<
-        NoopClock,
+        NoStdTestClock,
         NoopTelemetry,
         3,
         3,
     > as LimenRuntime<
-        limen_core::graph::bench::concurrent_graph::TestPipelineStd,
+        limen_core::graph::bench::concurrent_graph::TestPipelineStd<NoStdTestClock>,
         3,
         3,
     >>::request_stop(&mut runtime);
