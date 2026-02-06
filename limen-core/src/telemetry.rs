@@ -11,9 +11,6 @@ pub mod sink;
 #[cfg(feature = "std")]
 pub mod concurrent;
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
-
 use core::fmt;
 
 use crate::policy::WatermarkState;
@@ -371,6 +368,12 @@ pub struct NodeMetrics {
     pub deadline_miss_count: u64,
 }
 
+impl Default for NodeMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NodeMetrics {
     /// Create a new zero initialized metrics record.
     pub const fn new() -> Self {
@@ -392,6 +395,12 @@ impl NodeMetrics {
 pub struct EdgeMetrics {
     /// Current queue depth for the edge.
     pub queue_depth: u32,
+}
+
+impl Default for EdgeMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EdgeMetrics {

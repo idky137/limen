@@ -29,13 +29,16 @@
 //! - [`prelude`]: convenient re-exports for implementers.
 //!
 //! ## Feature Flags
-//! - `alloc`: enables optional APIs using `alloc` types. Not required for P0.
+//! - `alloc`: enables optional APIs using `alloc` types.
 //! - `std`: enables `std`-specific conveniences; implies `alloc`.
 //!
 //! ## Versioning and Stability
 //! The contracts defined here are intended to be *stable* so higher-level
 //! runtimes can evolve independently. Avoid adding trait objects or dynamic
 //! allocation requirements to keep the core maximally portable.
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 pub mod errors;
 pub mod memory;

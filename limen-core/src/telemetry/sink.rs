@@ -225,6 +225,12 @@ pub struct FixedBuffer<const N: usize> {
     length: usize,
 }
 
+impl<const N: usize> Default for FixedBuffer<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const N: usize> FixedBuffer<N> {
     /// Create a new empty buffer.
     pub const fn new() -> Self {
@@ -244,6 +250,12 @@ impl<const N: usize> FixedBuffer<N> {
     #[inline]
     pub fn len(&self) -> usize {
         self.length
+    }
+
+    /// Returns true if the buffer is empty.
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.length == 0
     }
 
     /// Access the written portion as bytes.
