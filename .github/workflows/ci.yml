@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        profile: [no-default-features, alloc, std]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ matrix.profile }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-hack (optional)
+        run: |
+          cargo install --locked cargo-hack || true
+
+      - name: Rustfmt check
+        run: cargo fmt --all -- --check
+
+      - name: Build & test (no-default-features)
+        if: matrix.profile == 'no-default-features'
+        run: |
+          cargo build --all --no-default-features --all-targets --verbose
+          cargo test --all --no-default-features --all-targets --verbose
+
+      - name: Build & test (alloc)
+        if: matrix.profile == 'alloc'
+        run: |
+          cargo build --all --features alloc --all-targets --verbose
+          cargo test  --all --features alloc --all-targets --verbose
+
+      - name: Build & test (std)
+        if: matrix.profile == 'std'
+        run: |
+          cargo build --all --features std --all-targets --verbose
+          cargo test  --all --features std --all-targets --verbose
+
+      - name: Clippy on std profile
+        if: matrix.profile == 'std'
+        run: |
+          rustup component add clippy || true
+          cargo clippy --all --features std -- -D warnings
