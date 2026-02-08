@@ -33,6 +33,7 @@ use crate::{
 /// # Invariants
 /// Callers should ensure `in_ports == IN as u16` and `out_ports == OUT as u16` so the
 /// stored counts are consistent with the node’s const-generic port arity.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct NodeLink<N, const IN: usize, const OUT: usize, InP, OutP>
 where
@@ -348,16 +349,67 @@ where
 /// `NodeDescriptor` captures static configuration of a node in the graph:
 /// its identity, kind, port counts, policy, and an optional name.
 /// It does not hold runtime state or implementation details.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct NodeDescriptor {
     /// Unique identifier of this node in the graph.
-    pub id: NodeIndex,
+    id: NodeIndex,
     /// High-level category of the node (source, process, sink, etc).
-    pub kind: NodeKind,
+    kind: NodeKind,
     /// Number of input ports declared by this node.
-    pub in_ports: u16,
+    in_ports: u16,
     /// Number of output ports declared by this node.
-    pub out_ports: u16,
+    out_ports: u16,
     /// Optional static name (for diagnostics or graph tooling).
-    pub name: Option<&'static str>,
+    name: Option<&'static str>,
+}
+
+impl NodeDescriptor {
+    /// Construct a new `NodeDescriptor`.
+    #[inline]
+    pub fn new(
+        id: NodeIndex,
+        kind: NodeKind,
+        in_ports: u16,
+        out_ports: u16,
+        name: Option<&'static str>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            in_ports,
+            out_ports,
+            name,
+        }
+    }
+
+    /// Unique identifier of this node in the graph.
+    #[inline]
+    pub fn id(&self) -> &NodeIndex {
+        &self.id
+    }
+
+    /// High-level category of the node (source, process, sink, etc).
+    #[inline]
+    pub fn kind(&self) -> &NodeKind {
+        &self.kind
+    }
+
+    /// Number of input ports declared by this node.
+    #[inline]
+    pub fn in_ports(&self) -> &u16 {
+        &self.in_ports
+    }
+
+    /// Number of output ports declared by this node.
+    #[inline]
+    pub fn out_ports(&self) -> &u16 {
+        &self.out_ports
+    }
+
+    /// Optional static name (for diagnostics or graph tooling).
+    #[inline]
+    pub fn name(&self) -> Option<&'static str> {
+        self.name
+    }
 }

@@ -56,32 +56,32 @@ pub fn validate_ports(
 
     // (A) Node id ↔ index must match exactly (0..N) and kind/arity constraints.
     for (i, nd) in nodes.iter().enumerate() {
-        if nd.id.as_usize() != &i {
+        if nd.id().as_usize() != &i {
             return Err(GraphError::IncompatiblePorts);
         }
-        match nd.kind {
+        match nd.kind() {
             NodeKind::Source => {
-                if nd.in_ports != 0 || nd.out_ports < 1 {
+                if nd.in_ports() != &0 || nd.out_ports() < &1 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Sink => {
-                if nd.in_ports < 1 || nd.out_ports != 0 {
+                if nd.in_ports() < &1 || nd.out_ports() != &0 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Split => {
-                if nd.in_ports < 1 || nd.out_ports < 2 {
+                if nd.in_ports() < &1 || nd.out_ports() < &2 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Join => {
-                if nd.in_ports < 2 || nd.out_ports < 1 {
+                if nd.in_ports() < &2 || nd.out_ports() < &1 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
             NodeKind::Process | NodeKind::Model => {
-                if nd.in_ports < 1 || nd.out_ports < 1 {
+                if nd.in_ports() < &1 || nd.out_ports() < &1 {
                     return Err(GraphError::IncompatiblePorts);
                 }
             }
@@ -108,7 +108,7 @@ pub fn validate_ports(
             if t >= &n {
                 return Err(GraphError::IncompatiblePorts);
             }
-            if nodes[*t].kind != NodeKind::Source {
+            if nodes[*t].kind() != &NodeKind::Source {
                 return Err(GraphError::IncompatiblePorts);
             }
 
@@ -138,10 +138,10 @@ pub fn validate_ports(
         let nt = &nodes[*t];
 
         // Regular port bounds.
-        if *ed.upstream().port().as_usize() >= nf.out_ports as usize {
+        if *ed.upstream().port().as_usize() >= *nf.out_ports() as usize {
             return Err(GraphError::IncompatiblePorts);
         }
-        if *ed.downstream().port().as_usize() >= nt.in_ports as usize {
+        if *ed.downstream().port().as_usize() >= *nt.in_ports() as usize {
             return Err(GraphError::IncompatiblePorts);
         }
     }

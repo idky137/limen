@@ -998,11 +998,11 @@ pub mod concurrent_graph {
                 }
                 1 => {
                     let e = &self.edges.0;
-                    e.occupancy(&e.policy())
+                    e.occupancy(e.policy())
                 }
                 2 => {
                     let e = &self.edges.1;
-                    e.occupancy(&e.policy())
+                    e.occupancy(e.policy())
                 }
                 _ => return Err(GraphError::InvalidEdgeIndex),
             };
