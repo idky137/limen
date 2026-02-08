@@ -115,8 +115,8 @@ pub fn enqueue_with_admission<P: Payload, Q: Edge<Item = Message<P>>>(
     match policy.decide(
         occ.items,
         occ.bytes,
-        msg.header_ref().deadline_ns(),
-        msg.header_ref().qos(),
+        *msg.header().deadline_ns(),
+        *msg.header().qos(),
     ) {
         AdmissionDecision::Admit => queue.try_push(msg, policy),
         AdmissionDecision::Reject => EnqueueResult::Rejected,

@@ -441,7 +441,7 @@ impl<'a> NonStd<'a> {
         quote! {
             let node_idx = limen_core::types::NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
-                if ed.upstream.node() == node_idx || ed.downstream.node() == node_idx {
+                if *ed.upstream.node() == node_idx || *ed.downstream.node() == node_idx {
                     let k = (ed.id).as_usize();
                     match k {
                         #( #arms )*,
@@ -1662,7 +1662,7 @@ impl<'a> Std<'a> {
         quote! {
             let node_idx = limen_core::types::NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
-                if ed.upstream.node() == node_idx || ed.downstream.node() == node_idx {
+                if *ed.upstream.node() == node_idx || *ed.downstream.node() == node_idx {
                     let k = (ed.id).as_usize();
                     match k {
                         #( #arms )*,

@@ -69,8 +69,8 @@ impl PlacementAcceptance {
 
     /// Return the raw bits.
     #[inline]
-    pub const fn bits(&self) -> u32 {
-        self.bits
+    pub const fn bits(&self) -> &u32 {
+        &self.bits
     }
 
     /// Return true if there are no accepted classes.
@@ -199,14 +199,14 @@ impl BufferDescriptor {
 
     /// Return the byte size of the payload.
     #[inline]
-    pub const fn bytes(&self) -> usize {
-        self.bytes
+    pub const fn bytes(&self) -> &usize {
+        &self.bytes
     }
 
     /// Return the memory class where this payload resides.
     #[inline]
-    pub const fn class(&self) -> MemoryClass {
-        self.class
+    pub const fn class(&self) -> &MemoryClass {
+        &self.class
     }
 }
 

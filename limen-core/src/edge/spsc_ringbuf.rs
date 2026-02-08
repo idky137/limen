@@ -71,9 +71,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
                     && self.len_internal() > 0 =>
             {
                 if let Some(ev) = self.cons.try_pop() {
-                    self.bytes = self
-                        .bytes
-                        .saturating_sub(ev.header_ref().payload_size_bytes());
+                    self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
                 }
             }
             _ => {}
@@ -83,7 +81,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
             return EnqueueResult::Rejected;
         }
 
-        let payload_bytes = item.header_ref().payload_size_bytes();
+        let payload_bytes = *item.header().payload_size_bytes();
         if let Err(_item_back) = self.prod.try_push(item) {
             return EnqueueResult::Rejected;
         }
@@ -96,7 +94,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
             Some(item) => {
                 self.bytes = self
                     .bytes
-                    .saturating_sub(item.header_ref().payload_size_bytes());
+                    .saturating_sub(*item.header().payload_size_bytes());
                 Ok(item)
             }
             None => Err(QueueError::Empty),

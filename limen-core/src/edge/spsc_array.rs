@@ -73,7 +73,7 @@ impl<P: Payload + Clone, const N: usize> Edge for StaticRing<Message<P>, N> {
                 let evicted = self.pop_raw();
                 self.bytes = self
                     .bytes
-                    .saturating_sub(evicted.header_ref().payload_size_bytes());
+                    .saturating_sub(*evicted.header().payload_size_bytes());
             }
             _ => {}
         }
@@ -84,7 +84,7 @@ impl<P: Payload + Clone, const N: usize> Edge for StaticRing<Message<P>, N> {
 
         self.bytes = self
             .bytes
-            .saturating_add(item.header_ref().payload_size_bytes());
+            .saturating_add(*item.header().payload_size_bytes());
         self.push_raw(item);
         EnqueueResult::Enqueued
     }
@@ -96,7 +96,7 @@ impl<P: Payload + Clone, const N: usize> Edge for StaticRing<Message<P>, N> {
         let item = self.pop_raw();
         self.bytes = self
             .bytes
-            .saturating_sub(item.header_ref().payload_size_bytes());
+            .saturating_sub(*item.header().payload_size_bytes());
         Ok(item)
     }
 

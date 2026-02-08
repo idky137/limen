@@ -150,14 +150,14 @@ impl NodeError {
 
     /// Return the error kind.
     #[inline]
-    pub const fn kind(&self) -> NodeErrorKind {
-        self.kind
+    pub const fn kind(&self) -> &NodeErrorKind {
+        &self.kind
     }
 
     /// Return the numeric code associated with this error.
     #[inline]
-    pub const fn code(&self) -> u32 {
-        self.code
+    pub const fn code(&self) -> &u32 {
+        &self.code
     }
 }
 
@@ -219,14 +219,14 @@ impl InferenceError {
 
     /// Return the inference error kind.
     #[inline]
-    pub const fn kind(&self) -> InferenceErrorKind {
-        self.kind
+    pub const fn kind(&self) -> &InferenceErrorKind {
+        &self.kind
     }
 
     /// Return the numeric code associated with this inference error.
     #[inline]
-    pub const fn code(&self) -> u32 {
-        self.code
+    pub const fn code(&self) -> &u32 {
+        &self.code
     }
 }
 

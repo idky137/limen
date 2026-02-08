@@ -134,14 +134,14 @@ impl DeadlinePolicy {
 
     /// Borrow the slack_tolerance_ns.
     #[inline]
-    pub const fn slack_tolerance_ns(&self) -> Option<DeadlineNs> {
-        self.slack_tolerance_ns
+    pub const fn slack_tolerance_ns(&self) -> &Option<DeadlineNs> {
+        &self.slack_tolerance_ns
     }
 
     /// Borrow the default_deadline_ns.
     #[inline]
-    pub const fn default_deadline_ns(&self) -> Option<DeadlineNs> {
-        self.default_deadline_ns
+    pub const fn default_deadline_ns(&self) -> &Option<DeadlineNs> {
+        &self.default_deadline_ns
     }
 }
 

@@ -94,9 +94,9 @@ pub fn fmt_event<W: fmt::Write>(w: &mut W, e: &TelemetryEvent) -> fmt::Result {
     match e {
         TelemetryEvent::Runtime(ev) => {
             w.write_str("runtime id=")?;
-            write_u64(w, ev.graph_id() as u64)?;
+            write_u64(w, *ev.graph_id() as u64)?;
             w.write_str(" ts=")?;
-            write_u64(w, ev.timestamp_ns())?;
+            write_u64(w, *ev.timestamp_ns())?;
             w.write_str(" kind=")?;
             w.write_str(match ev.event_kind() {
                 RuntimeTelemetryEventKind::GraphStarted => "GraphStarted",
@@ -121,23 +121,23 @@ pub fn fmt_event<W: fmt::Write>(w: &mut W, e: &TelemetryEvent) -> fmt::Result {
         }
         TelemetryEvent::NodeStep(ev) => {
             w.write_str("node-step gid=")?;
-            write_u64(w, ev.graph_id() as u64)?;
+            write_u64(w, *ev.graph_id() as u64)?;
             w.write_str(" nin=")?;
-            write_u64(w, ev.node_index().as_usize() as u64)?;
+            write_u64(w, *ev.node_index().as_usize() as u64)?;
             w.write_str(" ts_start=")?;
-            write_u64(w, ev.timestamp_start_ns())?;
+            write_u64(w, *ev.timestamp_start_ns())?;
             w.write_str(" ts_end=")?;
-            write_u64(w, ev.timestamp_end_ns())?;
+            write_u64(w, *ev.timestamp_end_ns())?;
             w.write_str(" dur=")?;
-            write_u64(w, ev.duration_ns())?;
+            write_u64(w, *ev.duration_ns())?;
             w.write_str(" dl=")?;
-            if let Some(d) = ev.deadline_ns() {
+            if let Some(d) = *ev.deadline_ns() {
                 write_u64(w, d)?;
             } else {
                 w.write_str("-")?;
             }
             w.write_str(" miss=")?;
-            w.write_str(if ev.deadline_missed() { "1" } else { "0" })?;
+            w.write_str(if *ev.deadline_missed() { "1" } else { "0" })?;
             w.write_str(" err=")?;
             if let Some(k) = ev.error_kind() {
                 w.write_str(match k {
@@ -154,15 +154,15 @@ pub fn fmt_event<W: fmt::Write>(w: &mut W, e: &TelemetryEvent) -> fmt::Result {
         }
         TelemetryEvent::EdgeSnapshot(ev) => {
             w.write_str("edge-snap gid=")?;
-            write_u64(w, ev.graph_id() as u64)?;
+            write_u64(w, *ev.graph_id() as u64)?;
             w.write_str(" eid=")?;
-            write_u64(w, ev.edge_index().as_usize() as u64)?;
+            write_u64(w, *ev.edge_index().as_usize() as u64)?;
             w.write_str(" ts=")?;
-            write_u64(w, ev.timestamp_ns())?;
+            write_u64(w, *ev.timestamp_ns())?;
             w.write_str(" occ=")?;
-            write_u64(w, ev.current_occupancy() as u64)?;
+            write_u64(w, *ev.current_occupancy() as u64)?;
             w.write_str(" wm=")?;
-            w.write_str(wm_str(ev.watermark_state()))?;
+            w.write_str(wm_str(*ev.watermark_state()))?;
             w.write_str("\n")
         }
     }
@@ -249,8 +249,8 @@ impl<const N: usize> FixedBuffer<N> {
 
     /// Number of bytes currently written.
     #[inline]
-    pub fn len(&self) -> usize {
-        self.length
+    pub fn len(&self) -> &usize {
+        &self.length
     }
 
     /// Returns true if the buffer is empty.

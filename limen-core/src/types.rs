@@ -13,8 +13,8 @@ impl TraceId {
     }
 
     /// Return the inner u64.
-    pub fn as_u64(&self) -> u64 {
-        self.0
+    pub fn as_u64(&self) -> &u64 {
+        &self.0
     }
 }
 
@@ -29,8 +29,8 @@ impl SequenceNumber {
     }
 
     /// Return the inner u64.
-    pub fn as_u64(&self) -> u64 {
-        self.0
+    pub fn as_u64(&self) -> &u64 {
+        &self.0
     }
 }
 
@@ -73,8 +73,8 @@ impl Ticks {
     }
 
     /// Return the inner u64.
-    pub fn as_u64(&self) -> u64 {
-        self.0
+    pub fn as_u64(&self) -> &u64 {
+        &self.0
     }
 }
 
@@ -89,8 +89,8 @@ impl DeadlineNs {
     }
 
     /// Return the inner u64.
-    pub fn as_u64(&self) -> u64 {
-        self.0
+    pub fn as_u64(&self) -> &u64 {
+        &self.0
     }
 }
 
@@ -128,13 +128,13 @@ impl PortId {
     }
 
     /// Return the node index.
-    pub fn node(&self) -> NodeIndex {
-        self.node
+    pub fn node(&self) -> &NodeIndex {
+        &self.node
     }
 
     /// Return the port index.
-    pub fn port(&self) -> PortIndex {
-        self.port
+    pub fn port(&self) -> &PortIndex {
+        &self.port
     }
 }
 
@@ -158,8 +158,8 @@ impl PortIndex {
 
     /// Return the inner usize held.
     #[inline]
-    pub fn as_usize(self) -> usize {
-        self.0
+    pub fn as_usize(&self) -> &usize {
+        &self.0
     }
 }
 
@@ -183,8 +183,8 @@ impl NodeIndex {
 
     /// Return the inner usize held.
     #[inline]
-    pub fn as_usize(self) -> usize {
-        self.0
+    pub fn as_usize(&self) -> &usize {
+        &self.0
     }
 }
 
@@ -208,8 +208,8 @@ impl EdgeIndex {
 
     /// Return the inner usize held.
     #[inline]
-    pub fn as_usize(self) -> usize {
-        self.0
+    pub fn as_usize(&self) -> &usize {
+        &self.0
     }
 }
 

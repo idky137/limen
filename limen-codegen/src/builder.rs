@@ -168,7 +168,7 @@ impl GraphBuilder {
         N: limen_core::node::Node<IN, OUT, InP, OutP> + 'static,
     {
         // Extract numeric index
-        let idx = link.id().as_usize();
+        let idx = *link.id().as_usize();
 
         // Type names for node and payload types
         let node_ty = type_of_val_to_syn_type::<N>();
@@ -239,7 +239,7 @@ impl GraphBuilder {
         P: Payload + 'static,
         Q: limen_core::edge::Edge<Item = Message<P>> + 'static,
     {
-        let id = link.id().as_usize();
+        let id = *link.id().as_usize();
 
         // Queue type and payload type
         let q_ty = type_of_val_to_syn_type::<Q>();
@@ -248,10 +248,10 @@ impl GraphBuilder {
         // Endpoint indices: upstream and downstream NodeIndex / PortIndex -> usize
         let up = link.upstream_port();
         let dn = link.downstream_port();
-        let from_node = up.node().as_usize();
-        let from_port = up.port().as_usize();
-        let to_node = dn.node().as_usize();
-        let to_port = dn.port().as_usize();
+        let from_node = *up.node().as_usize();
+        let from_port = *up.port().as_usize();
+        let to_node = *dn.node().as_usize();
+        let to_port = *dn.port().as_usize();
 
         // Policy expression
         let policy_expr = {

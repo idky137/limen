@@ -38,8 +38,8 @@ impl MessageFlags {
 
     /// Return the raw flag bits.
     #[inline]
-    pub const fn bits(self) -> u32 {
-        self.0
+    pub const fn bits(&self) -> &u32 {
+        &self.0
     }
 
     /// Set a flag bit.
@@ -171,14 +171,14 @@ impl MessageHeader {
     #[inline]
     pub fn sync_from_payload<P: Payload>(&mut self, payload: &P) {
         let desc = payload.buffer_descriptor();
-        self.payload_size_bytes = desc.bytes();
-        self.memory_class = desc.class();
+        self.payload_size_bytes = *desc.bytes();
+        self.memory_class = *desc.class();
     }
 
     /// Return the trace id.
     #[inline]
-    pub const fn trace_id(&self) -> TraceId {
-        self.trace_id
+    pub const fn trace_id(&self) -> &TraceId {
+        &self.trace_id
     }
 
     /// Set the trace id.
@@ -189,8 +189,8 @@ impl MessageHeader {
 
     /// Return the sequence number.
     #[inline]
-    pub const fn sequence(&self) -> SequenceNumber {
-        self.sequence
+    pub const fn sequence(&self) -> &SequenceNumber {
+        &self.sequence
     }
 
     /// Set the sequence number.
@@ -201,8 +201,8 @@ impl MessageHeader {
 
     /// Return the creation tick.
     #[inline]
-    pub const fn creation_tick(&self) -> Ticks {
-        self.creation_tick
+    pub const fn creation_tick(&self) -> &Ticks {
+        &self.creation_tick
     }
 
     /// Set the creation tick.
@@ -213,8 +213,8 @@ impl MessageHeader {
 
     /// Return the optional deadline.
     #[inline]
-    pub const fn deadline_ns(&self) -> Option<DeadlineNs> {
-        self.deadline_ns
+    pub const fn deadline_ns(&self) -> &Option<DeadlineNs> {
+        &self.deadline_ns
     }
 
     /// Set the optional deadline in nanoseconds since boot.
@@ -225,8 +225,8 @@ impl MessageHeader {
 
     /// Return the QoS class.
     #[inline]
-    pub const fn qos(&self) -> QoSClass {
-        self.qos
+    pub const fn qos(&self) -> &QoSClass {
+        &self.qos
     }
 
     /// Set the QoS class.
@@ -237,8 +237,8 @@ impl MessageHeader {
 
     /// Return the payload size in bytes.
     #[inline]
-    pub const fn payload_size_bytes(&self) -> usize {
-        self.payload_size_bytes
+    pub const fn payload_size_bytes(&self) -> &usize {
+        &self.payload_size_bytes
     }
 
     /// Set the payload size in bytes.
@@ -249,8 +249,8 @@ impl MessageHeader {
 
     /// Return the message flags.
     #[inline]
-    pub const fn flags(&self) -> MessageFlags {
-        self.flags
+    pub const fn flags(&self) -> &MessageFlags {
+        &self.flags
     }
 
     /// Set the message flags.
@@ -261,8 +261,8 @@ impl MessageHeader {
 
     /// Return the memory class.
     #[inline]
-    pub const fn memory_class(&self) -> MemoryClass {
-        self.memory_class
+    pub const fn memory_class(&self) -> &MemoryClass {
+        &self.memory_class
     }
 
     /// Set the memory class.
@@ -307,8 +307,8 @@ impl<P: Payload> Message<P> {
     /// Construct a new message from a header and payload, fixing size and class.
     pub fn new(mut header: MessageHeader, payload: P) -> Self {
         let desc = payload.buffer_descriptor();
-        header.payload_size_bytes = desc.bytes();
-        header.memory_class = desc.class();
+        header.payload_size_bytes = *desc.bytes();
+        header.memory_class = *desc.class();
         Self { header, payload }
     }
 
@@ -317,8 +317,8 @@ impl<P: Payload> Message<P> {
     pub fn with_payload<Q: Payload>(self, payload: Q) -> Message<Q> {
         let mut header = self.header;
         let desc = payload.buffer_descriptor();
-        header.payload_size_bytes = desc.bytes();
-        header.memory_class = desc.class();
+        header.payload_size_bytes = *desc.bytes();
+        header.memory_class = *desc.class();
         Message { header, payload }
     }
 
@@ -336,8 +336,8 @@ impl<P: Payload> Message<P> {
 
         // Recompute size and placement from the new payload.
         let desc = new_payload.buffer_descriptor();
-        header.payload_size_bytes = desc.bytes();
-        header.memory_class = desc.class();
+        header.payload_size_bytes = *desc.bytes();
+        header.memory_class = *desc.class();
 
         Message {
             header,
@@ -345,15 +345,9 @@ impl<P: Payload> Message<P> {
         }
     }
 
-    /// Return the payload.
-    #[inline]
-    pub fn payload(self) -> P {
-        self.payload
-    }
-
     /// Borrow the payload.
     #[inline]
-    pub fn payload_ref(&self) -> &P {
+    pub fn payload(&self) -> &P {
         &self.payload
     }
 
@@ -363,15 +357,9 @@ impl<P: Payload> Message<P> {
         &mut self.payload
     }
 
-    /// Return the header.
-    #[inline]
-    pub fn header(self) -> MessageHeader {
-        self.header
-    }
-
     /// Borrow the header.
     #[inline]
-    pub fn header_ref(&self) -> &MessageHeader {
+    pub fn header(&self) -> &MessageHeader {
         &self.header
     }
 

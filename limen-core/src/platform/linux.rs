@@ -76,7 +76,7 @@ impl PlatformClock for NoStdLinuxMonotonicClock {
     #[inline]
     fn ticks_to_nanos(&self, ticks: Ticks) -> u64 {
         // Identity mapping: ticks are nanoseconds.
-        ticks.as_u64()
+        *ticks.as_u64()
     }
 
     #[inline]
@@ -135,7 +135,7 @@ impl PlatformClock for StdLinuxMonotonicClock {
     #[inline]
     fn ticks_to_nanos(&self, ticks: Ticks) -> u64 {
         // Identity mapping: ticks are nanoseconds.
-        ticks.as_u64()
+        *ticks.as_u64()
     }
 
     #[inline]

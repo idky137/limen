@@ -165,20 +165,20 @@ impl TelemetryKey {
 
     /// Return the namespace.
     #[inline]
-    pub const fn ns(&self) -> TelemetryNs {
-        self.ns
+    pub const fn ns(&self) -> &TelemetryNs {
+        &self.ns
     }
 
     /// Return the identifier.
     #[inline]
-    pub const fn id(&self) -> u32 {
-        self.id
+    pub const fn id(&self) -> &u32 {
+        &self.id
     }
 
     /// Return the logical kind.
     #[inline]
-    pub const fn kind(&self) -> TelemetryKind {
-        self.kind
+    pub const fn kind(&self) -> &TelemetryKind {
+        &self.kind
     }
 }
 
@@ -305,56 +305,56 @@ impl NodeStepTelemetry {
 
     /// Returns the identifier of the graph instance this step belongs to.
     #[inline]
-    pub const fn graph_id(&self) -> GraphInstanceId {
-        self.graph_id
+    pub const fn graph_id(&self) -> &GraphInstanceId {
+        &self.graph_id
     }
 
     /// Returns the index of the node within the graph.
     #[inline]
-    pub const fn node_index(&self) -> NodeIndex {
-        self.node_index
+    pub const fn node_index(&self) -> &NodeIndex {
+        &self.node_index
     }
 
     /// Returns the optional static node name associated with this step.
     #[inline]
-    pub const fn node_name(&self) -> Option<&'static str> {
-        self.node_name
+    pub const fn node_name(&self) -> &Option<&'static str> {
+        &self.node_name
     }
 
     /// Returns the step start timestamp in nanoseconds since an arbitrary epoch.
     #[inline]
-    pub const fn timestamp_start_ns(&self) -> u64 {
-        self.timestamp_start_ns
+    pub const fn timestamp_start_ns(&self) -> &u64 {
+        &self.timestamp_start_ns
     }
 
     /// Returns the step end timestamp in nanoseconds since an arbitrary epoch.
     #[inline]
-    pub const fn timestamp_end_ns(&self) -> u64 {
-        self.timestamp_end_ns
+    pub const fn timestamp_end_ns(&self) -> &u64 {
+        &self.timestamp_end_ns
     }
 
     /// Returns the step duration in nanoseconds.
     #[inline]
-    pub const fn duration_ns(&self) -> u64 {
-        self.duration_ns
+    pub const fn duration_ns(&self) -> &u64 {
+        &self.duration_ns
     }
 
     /// Returns the optional absolute deadline for this step in nanoseconds.
     #[inline]
-    pub const fn deadline_ns(&self) -> Option<u64> {
-        self.deadline_ns
+    pub const fn deadline_ns(&self) -> &Option<u64> {
+        &self.deadline_ns
     }
 
     /// Returns whether the step exceeded its deadline.
     #[inline]
-    pub const fn deadline_missed(&self) -> bool {
-        self.deadline_missed
+    pub const fn deadline_missed(&self) -> &bool {
+        &self.deadline_missed
     }
 
     /// Returns the optional high-level error classification for this step.
     #[inline]
-    pub const fn error_kind(&self) -> Option<NodeStepError> {
-        self.error_kind
+    pub const fn error_kind(&self) -> &Option<NodeStepError> {
+        &self.error_kind
     }
 }
 
@@ -416,56 +416,56 @@ impl EdgeSnapshotTelemetry {
 
     /// Returns the identifier of the graph instance this edge belongs to.
     #[inline]
-    pub const fn graph_id(&self) -> GraphInstanceId {
-        self.graph_id
+    pub const fn graph_id(&self) -> &GraphInstanceId {
+        &self.graph_id
     }
 
     /// Returns the index of the edge within the graph.
     #[inline]
-    pub const fn edge_index(&self) -> EdgeIndex {
-        self.edge_index
+    pub const fn edge_index(&self) -> &EdgeIndex {
+        &self.edge_index
     }
 
     /// Returns the index of the source node for this edge.
     #[inline]
-    pub const fn source_node_index(&self) -> NodeIndex {
-        self.source_node_index
+    pub const fn source_node_index(&self) -> &NodeIndex {
+        &self.source_node_index
     }
 
     /// Returns the index of the target node for this edge.
     #[inline]
-    pub const fn target_node_index(&self) -> NodeIndex {
-        self.target_node_index
+    pub const fn target_node_index(&self) -> &NodeIndex {
+        &self.target_node_index
     }
 
     /// Returns the snapshot timestamp in nanoseconds since an arbitrary epoch.
     #[inline]
-    pub const fn timestamp_ns(&self) -> u64 {
-        self.timestamp_ns
+    pub const fn timestamp_ns(&self) -> &u64 {
+        &self.timestamp_ns
     }
 
     /// Returns the current occupancy of the edge buffer.
     #[inline]
-    pub const fn current_occupancy(&self) -> u32 {
-        self.current_occupancy
+    pub const fn current_occupancy(&self) -> &u32 {
+        &self.current_occupancy
     }
 
     /// Returns the configured soft watermark for this edge.
     #[inline]
-    pub const fn soft_watermark(&self) -> u32 {
-        self.soft_watermark
+    pub const fn soft_watermark(&self) -> &u32 {
+        &self.soft_watermark
     }
 
     /// Returns the configured hard watermark for this edge.
     #[inline]
-    pub const fn hard_watermark(&self) -> u32 {
-        self.hard_watermark
+    pub const fn hard_watermark(&self) -> &u32 {
+        &self.hard_watermark
     }
 
     /// Returns the current watermark state relative to the configured thresholds.
     #[inline]
-    pub const fn watermark_state(&self) -> WatermarkState {
-        self.watermark_state
+    pub const fn watermark_state(&self) -> &WatermarkState {
+        &self.watermark_state
     }
 }
 
@@ -540,26 +540,26 @@ impl RuntimeTelemetryEvent {
 
     /// Returns the identifier of the graph instance this event refers to.
     #[inline]
-    pub const fn graph_id(&self) -> GraphInstanceId {
-        self.graph_id
+    pub const fn graph_id(&self) -> &GraphInstanceId {
+        &self.graph_id
     }
 
     /// Returns the event timestamp in nanoseconds since an arbitrary epoch.
     #[inline]
-    pub const fn timestamp_ns(&self) -> u64 {
-        self.timestamp_ns
+    pub const fn timestamp_ns(&self) -> &u64 {
+        &self.timestamp_ns
     }
 
     /// Returns the kind of runtime event that occurred.
     #[inline]
-    pub const fn event_kind(&self) -> RuntimeTelemetryEventKind {
-        self.event_kind
+    pub const fn event_kind(&self) -> &RuntimeTelemetryEventKind {
+        &self.event_kind
     }
 
     /// Returns the optional static message associated with this event.
     #[inline]
-    pub const fn message(&self) -> Option<EventMessage> {
-        self.message
+    pub const fn message(&self) -> &Option<EventMessage> {
+        &self.message
     }
 }
 
@@ -646,50 +646,50 @@ impl NodeMetrics {
 
     /// Returns the number of items successfully processed by the node.
     #[inline]
-    pub const fn processed(&self) -> u64 {
-        self.processed
+    pub const fn processed(&self) -> &u64 {
+        &self.processed
     }
 
     /// Returns the number of items dropped by the node.
     #[inline]
-    pub const fn dropped(&self) -> u64 {
-        self.dropped
+    pub const fn dropped(&self) -> &u64 {
+        &self.dropped
     }
 
     /// Returns the number of ingress messages observed by the node.
     #[inline]
-    pub const fn ingress(&self) -> u64 {
-        self.ingress
+    pub const fn ingress(&self) -> &u64 {
+        &self.ingress
     }
 
     /// Returns the number of egress messages emitted by the node.
     #[inline]
-    pub const fn egress(&self) -> u64 {
-        self.egress
+    pub const fn egress(&self) -> &u64 {
+        &self.egress
     }
 
     /// Returns the sum of all recorded latencies in nanoseconds.
     #[inline]
-    pub const fn lat_sum(&self) -> u64 {
-        self.lat_sum
+    pub const fn lat_sum(&self) -> &u64 {
+        &self.lat_sum
     }
 
     /// Returns the number of latency samples recorded.
     #[inline]
-    pub const fn lat_cnt(&self) -> u64 {
-        self.lat_cnt
+    pub const fn lat_cnt(&self) -> &u64 {
+        &self.lat_cnt
     }
 
     /// Returns the maximum latency observed in nanoseconds.
     #[inline]
-    pub const fn lat_max(&self) -> u64 {
-        self.lat_max
+    pub const fn lat_max(&self) -> &u64 {
+        &self.lat_max
     }
 
     /// Returns the number of deadline misses observed for this node.
     #[inline]
-    pub const fn deadline_miss_count(&self) -> u64 {
-        self.deadline_miss_count
+    pub const fn deadline_miss_count(&self) -> &u64 {
+        &self.deadline_miss_count
     }
 
     /// Increment `processed` by `delta` (saturating).
@@ -830,8 +830,8 @@ impl EdgeMetrics {
 
     /// Returns the current queue depth for the edge.
     #[inline]
-    pub const fn queue_depth(&self) -> u32 {
-        self.queue_depth
+    pub const fn queue_depth(&self) -> &u32 {
+        &self.queue_depth
     }
 
     /// Sets the current queue depth for the edge.

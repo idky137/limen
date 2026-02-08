@@ -56,9 +56,7 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
                     && !self.buf.is_empty() =>
             {
                 if let Some(ev) = self.buf.pop_front() {
-                    self.bytes = self
-                        .bytes
-                        .saturating_sub(ev.header_ref().payload_size_bytes());
+                    self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
                 }
             }
             _ => {}
@@ -70,7 +68,7 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
 
         self.bytes = self
             .bytes
-            .saturating_add(item.header_ref().payload_size_bytes());
+            .saturating_add(*item.header().payload_size_bytes());
         self.buf.push_back(item);
         EnqueueResult::Enqueued
     }
@@ -80,7 +78,7 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
             Some(item) => {
                 self.bytes = self
                     .bytes
-                    .saturating_sub(item.header_ref().payload_size_bytes());
+                    .saturating_sub(*item.header().payload_size_bytes());
                 Ok(item)
             }
             None => Err(QueueError::Empty),

@@ -44,7 +44,7 @@ impl PlatformClock for NoopClock {
 
     #[inline]
     fn ticks_to_nanos(&self, ticks: Ticks) -> u64 {
-        ticks.as_u64()
+        *ticks.as_u64()
     }
 
     #[inline]
@@ -61,7 +61,7 @@ impl PlatformClock for () {
 
     #[inline]
     fn ticks_to_nanos(&self, ticks: Ticks) -> u64 {
-        ticks.as_u64()
+        *ticks.as_u64()
     }
 
     #[inline]
