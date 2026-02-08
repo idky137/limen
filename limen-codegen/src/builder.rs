@@ -80,7 +80,7 @@ pub enum GraphVisibility {
 }
 
 impl GraphVisibility {
-    fn to_syn_visibility(&self) -> Visibility {
+    fn as_syn_visibility(&self) -> Visibility {
         match &self {
             GraphVisibility::Public => parse_str::<Visibility>("pub").expect("parse pub"),
             GraphVisibility::Crate => {
@@ -116,7 +116,7 @@ impl GraphBuilder {
     /// This convenience avoids calling `syn::parse_quote` in build.rs; we
     /// synthesize a `syn::Visibility` internally.
     pub fn new(name: &str, vis: GraphVisibility) -> Self {
-        let vis_syn = vis.to_syn_visibility();
+        let vis_syn = vis.as_syn_visibility();
         let name_ident: Ident = parse_str(name).expect("invalid graph name");
         Self {
             vis: Some(vis_syn),
@@ -176,10 +176,7 @@ impl GraphBuilder {
         let out_p_ty = type_of_val_to_syn_type::<OutP>();
 
         // Optional name expression
-        let name_opt = match link.name() {
-            Some(nm) => Some(name_to_expr(Some(nm))),
-            None => None,
-        };
+        let name_opt = link.name().map(|nm| name_to_expr(Some(nm)));
 
         // Optional ingress policy expression (convert if supplied).
         let ingress_expr = match ingress_policy {
@@ -193,7 +190,7 @@ impl GraphBuilder {
         self.nodes.push(ast::NodeDef {
             idx,
             ty: match node_ty {
-                Type::Path(tp) => tp.into(), // convert Type -> TypePath
+                Type::Path(tp) => tp, // convert Type -> TypePath
                 _ => panic!("node type must be a path"),
             },
             in_ports: IN,
@@ -262,15 +259,12 @@ impl GraphBuilder {
             parse_str::<Expr>(&s).expect("failed to parse EdgePolicy")
         };
 
-        let name_opt = match link.name() {
-            Some(nm) => Some(name_to_expr(Some(nm))),
-            None => None,
-        };
+        let name_opt = link.name().map(|nm| name_to_expr(Some(nm)));
 
         self.edges.push(ast::EdgeDef {
             idx: id,
             ty: match q_ty {
-                Type::Path(tp) => tp.into(),
+                Type::Path(tp) => tp,
                 _ => panic!("edge queue type must be a path"),
             },
             payload: p_ty,
