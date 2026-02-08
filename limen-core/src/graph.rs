@@ -251,11 +251,7 @@ pub trait GraphApi<const NODE_COUNT: usize, const EDGE_COUNT: usize> {
     /// graph-level constraints.
     #[inline]
     fn validate_graph(&self) -> Result<(), GraphError> {
-        GraphDescBuf {
-            nodes: self.get_node_descriptors(),
-            edges: self.get_edge_descriptors(),
-        }
-        .validate()
+        GraphDescBuf::new(self.get_node_descriptors(), self.get_edge_descriptors()).validate()
     }
 
     // ----- Occupancy snapshot helpers -----

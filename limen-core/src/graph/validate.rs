@@ -20,9 +20,29 @@ pub trait GraphValidator {
 #[derive(Debug, Clone)]
 pub struct GraphDescBuf<const N: usize, const E: usize> {
     /// Nodes descriptors.
-    pub nodes: [NodeDescriptor; N],
+    nodes: [NodeDescriptor; N],
     /// Edge descriptors.
-    pub edges: [EdgeDescriptor; E],
+    edges: [EdgeDescriptor; E],
+}
+
+impl<const N: usize, const E: usize> GraphDescBuf<N, E> {
+    /// Construct a new `GraphDescBuf` owning node and edge descriptor arrays.
+    #[inline]
+    pub fn new(nodes: [NodeDescriptor; N], edges: [EdgeDescriptor; E]) -> Self {
+        Self { nodes, edges }
+    }
+
+    /// Borrow the node descriptors.
+    #[inline]
+    pub fn nodes(&self) -> &[NodeDescriptor; N] {
+        &self.nodes
+    }
+
+    /// Borrow the edge descriptors.
+    #[inline]
+    pub fn edges(&self) -> &[EdgeDescriptor; E] {
+        &self.edges
+    }
 }
 
 impl<const N: usize, const E: usize> GraphValidator for GraphDescBuf<N, E> {
