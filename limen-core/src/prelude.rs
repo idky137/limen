@@ -30,10 +30,14 @@ pub use crate::edge::spsc_vecdeque::*;
 #[cfg(feature = "spsc_raw")]
 pub use crate::edge::spsc_raw::*;
 
+#[cfg(any(test, feature = "bench"))]
 pub use crate::node::bench::*;
 
+#[cfg(any(test, feature = "bench"))]
 pub use crate::edge::bench::*;
 
+#[cfg(any(test, feature = "bench"))]
 pub use crate::graph::bench::*;
 
+#[cfg(any(test, feature = "bench"))]
 pub use crate::runtime::bench::*;

@@ -1,5 +1,6 @@
 //! Limen Runtime
 
+#[cfg(any(test, feature = "bench"))]
 pub mod bench;
 
 #[cfg(test)]

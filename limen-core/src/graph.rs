@@ -8,6 +8,11 @@
 //!
 //! Runtimes consume the **typed** `Graph` trait; tooling and codegen use descriptors.
 
+pub mod validate;
+
+#[cfg(any(test, feature = "bench"))]
+pub mod bench;
+
 use crate::node::Node;
 use crate::prelude::{PlatformClock, Telemetry};
 use crate::{
@@ -18,9 +23,6 @@ use crate::{
     node::{link::NodeDescriptor, StepContext, StepResult},
     policy::{EdgePolicy, NodePolicy},
 };
-
-pub mod bench;
-pub mod validate;
 
 // pub mod builder;
 

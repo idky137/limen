@@ -13,10 +13,10 @@ alloc = ["limen-core/alloc"]
 std = ["alloc", "limen-core/std"]
 
 [dev-dependencies]
-limen-core = { workspace = true }
+limen-core = { workspace = true, features = ["bench"] }
 limen-build = { workspace = true }
 
 [build-dependencies]
-limen-core = { workspace = true }
+limen-core = { workspace = true, features = ["bench"] }
 limen-codegen = { workspace = true }
 syn = { workspace = true }

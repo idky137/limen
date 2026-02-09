@@ -3,11 +3,13 @@
 //! Nodes are monomorphized by generics and const generics. There is **no dynamic
 //! dispatch** in the hot path. Port schemas and policies are encoded on the Node.
 
-pub mod bench;
 pub mod link;
 pub mod model;
 pub mod sink;
 pub mod source;
+
+#[cfg(any(test, feature = "bench"))]
+pub mod bench;
 
 use crate::edge::{Edge, EdgeOccupancy};
 use crate::errors::{NodeError, QueueError};

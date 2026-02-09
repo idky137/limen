@@ -4,7 +4,6 @@ use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionDecision, EdgePolicy, WatermarkState};
 
-pub mod bench;
 pub mod link;
 
 pub mod spsc_array;
@@ -22,6 +21,9 @@ pub mod spsc_concurrent;
 pub mod spsc_raw;
 
 pub mod spsc_priority2;
+
+#[cfg(any(test, feature = "bench"))]
+pub mod bench;
 
 /// Push result for enqueue attempts.
 #[non_exhaustive]
