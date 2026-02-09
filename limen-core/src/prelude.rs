@@ -1,29 +1,43 @@
 //! Convenience re-exports for implementers.
 
-pub use crate::edge;
+pub use crate::edge::{
+    enqueue_with_admission, link::*, spsc_array::*, spsc_priority2, Edge, EdgeOccupancy,
+    EnqueueResult, NoQueue,
+};
 pub use crate::errors::*;
-pub use crate::graph::*;
+pub use crate::graph::{validate::*, *};
 pub use crate::memory::*;
-pub use crate::message::*;
-pub use crate::node;
-pub use crate::platform::*;
+pub use crate::message::{payload::*, tensor::*, *};
+pub use crate::node::{
+    link::*, model::*, sink::*, source::*, Node, NodeCapabilities, NodeKind, StepContext,
+    StepResult,
+};
+pub use crate::platform::{linux::*, *};
 pub use crate::policy::*;
 pub use crate::scheduling::*;
-pub use crate::telemetry::*;
+pub use crate::telemetry::{event_message::*, graph_telemetry::*, sink::*, *};
 pub use crate::types::*;
 
-// Used by define_graph macro.
-// pub use crate::define_graph;
-pub use crate::edge::{
-    link::{EdgeDescriptor, EdgeLink},
-    NoQueue,
-};
-pub use crate::graph::{
-    GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes,
-};
-pub use crate::node::{
-    link::{NodeDescriptor, NodeLink},
-    StepContext,
-};
-pub use crate::policy::EdgePolicy;
-pub use crate::types::{EdgeIndex, NodeIndex, PortId, PortIndex};
+#[cfg(feature = "std")]
+pub use crate::telemetry::concurrent::*;
+
+#[cfg(feature = "std")]
+pub use crate::edge::{spsc_concurrent::*, spsc_ringbuf::*};
+
+#[cfg(feature = "alloc")]
+pub use crate::edge::spsc_vecdeque::*;
+
+#[cfg(feature = "spsc_raw")]
+pub use crate::edge::spsc_raw::*;
+
+#[cfg(any(test, feature = "bench"))]
+pub use crate::node::bench::*;
+
+#[cfg(any(test, feature = "bench"))]
+pub use crate::edge::bench::*;
+
+#[cfg(any(test, feature = "bench"))]
+pub use crate::graph::bench::*;
+
+#[cfg(any(test, feature = "bench"))]
+pub use crate::runtime::bench::*;

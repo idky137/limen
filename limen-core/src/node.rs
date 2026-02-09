@@ -3,11 +3,13 @@
 //! Nodes are monomorphized by generics and const generics. There is **no dynamic
 //! dispatch** in the hot path. Port schemas and policies are encoded on the Node.
 
-pub mod bench;
 pub mod link;
 pub mod model;
 pub mod sink;
 pub mod source;
+
+#[cfg(any(test, feature = "bench"))]
+pub mod bench;
 
 use crate::edge::{Edge, EdgeOccupancy};
 use crate::errors::{NodeError, QueueError};
@@ -21,6 +23,7 @@ use crate::types::Ticks;
 /// Categories of nodes used in graph descriptors and builders.
 ///
 /// These capture the high-level role of a node in the dataflow graph.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     /// A source node: 0 inputs / ≥1 outputs.
@@ -52,15 +55,40 @@ pub enum NodeKind {
 }
 
 /// Node capability descriptor (ops, dtypes, layouts, streams).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NodeCapabilities {
     /// Whether the node can execute on device streams (P2).
-    pub device_streams: bool,
+    device_streams: bool,
     /// Whether mixed-precision or degrade tiers are available.
-    pub degrade_tiers: bool,
+    degrade_tiers: bool,
+}
+
+impl NodeCapabilities {
+    /// Construct a new `NodeCapabilities`.
+    #[inline]
+    pub const fn new(device_streams: bool, degrade_tiers: bool) -> Self {
+        Self {
+            device_streams,
+            degrade_tiers,
+        }
+    }
+
+    /// Whether the node can execute on device streams (P2).
+    #[inline]
+    pub fn device_streams(&self) -> &bool {
+        &self.device_streams
+    }
+
+    /// Whether mixed-precision or degrade tiers are available.
+    #[inline]
+    pub fn degrade_tiers(&self) -> &bool {
+        &self.degrade_tiers
+    }
 }
 
 /// Result of a `step` call indicating progress and scheduling hints.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepResult {
     /// Work was performed (messages consumed and/or produced).
@@ -204,7 +232,7 @@ where
         if T::METRICS_ENABLED {
             self.telemetry.set_gauge(
                 TelemetryKey::edge(self.in_edge_ids[i], TelemetryKind::QueueDepth),
-                occ.items as u64,
+                *occ.items() as u64,
             );
         }
         occ
@@ -248,7 +276,7 @@ where
         if T::METRICS_ENABLED {
             self.telemetry.set_gauge(
                 TelemetryKey::edge(self.out_edge_ids[o], TelemetryKind::QueueDepth),
-                occ.items as u64,
+                *occ.items() as u64,
             );
         }
         occ

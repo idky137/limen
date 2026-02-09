@@ -100,28 +100,16 @@ impl<SrcClk: PlatformClock> TestPipeline<SrcClk> {
             EdgeLink::<Q32, u32>::new(
                 q_0,
                 EdgeIndex::from(1usize),
-                PortId {
-                    node: NodeIndex::from(0usize),
-                    port: PortIndex(0usize),
-                },
-                PortId {
-                    node: NodeIndex::from(1usize),
-                    port: PortIndex(0usize),
-                },
+                PortId::new(NodeIndex::from(0usize), PortIndex::from(0usize)),
+                PortId::new(NodeIndex::from(1usize), PortIndex::from(0usize)),
                 Q_32_POLICY,
                 Some("e0"),
             ),
             EdgeLink::<Q32, u32>::new(
                 q_1,
                 EdgeIndex::from(2usize),
-                PortId {
-                    node: NodeIndex::from(1usize),
-                    port: PortIndex(0usize),
-                },
-                PortId {
-                    node: NodeIndex::from(2usize),
-                    port: PortIndex(0usize),
-                },
+                PortId::new(NodeIndex::from(1usize), PortIndex::from(0usize)),
+                PortId::new(NodeIndex::from(2usize), PortIndex::from(0usize)),
                 Q_32_POLICY,
                 Some("e1"),
             ),
@@ -144,18 +132,12 @@ impl<SrcClk: PlatformClock> GraphApi<3, 3> for TestPipeline<SrcClk> {
     #[inline]
     fn get_edge_descriptors(&self) -> [EdgeDescriptor; 3] {
         [
-            EdgeDescriptor {
-                id: EdgeIndex::from(0usize),
-                upstream: PortId {
-                    node: EXTERNAL_INGRESS_NODE,
-                    port: PortIndex(0usize),
-                },
-                downstream: PortId {
-                    node: NodeIndex::from(0usize),
-                    port: PortIndex(0usize),
-                },
-                name: Some("ingress0"),
-            },
+            EdgeDescriptor::new(
+                EdgeIndex::from(0usize),
+                PortId::new(EXTERNAL_INGRESS_NODE, PortIndex::from(0usize)),
+                PortId::new(NodeIndex::from(0usize), PortIndex::from(0usize)),
+                Some("ingress0"),
+            ),
             self.edges.0.descriptor(),
             self.edges.1.descriptor(),
         ]
@@ -172,7 +154,11 @@ impl<SrcClk: PlatformClock> GraphApi<3, 3> for TestPipeline<SrcClk> {
 
     #[inline]
     fn get_edge_policies(&self) -> [EdgePolicy; 3] {
-        [INGRESS_POLICY, self.edges.0.policy(), self.edges.1.policy()]
+        [
+            INGRESS_POLICY,
+            *self.edges.0.policy(),
+            *self.edges.1.policy(),
+        ]
     }
 
     #[inline]
@@ -184,11 +170,11 @@ impl<SrcClk: PlatformClock> GraphApi<3, 3> for TestPipeline<SrcClk> {
             }
             1 => {
                 let e = &self.edges.0;
-                e.occupancy(&e.policy())
+                e.occupancy(e.policy())
             }
             2 => {
                 let e = &self.edges.1;
-                e.occupancy(&e.policy())
+                e.occupancy(e.policy())
             }
             _ => return Err(GraphError::InvalidEdgeIndex), // use your variant
         };
@@ -211,8 +197,8 @@ impl<SrcClk: PlatformClock> GraphApi<3, 3> for TestPipeline<SrcClk> {
         let node_idx = NodeIndex::from(I);
         // Iterate *all* edges; update those where this node is upstream OR downstream.
         for ed in self.get_edge_descriptors().iter() {
-            if ed.upstream.node == node_idx || ed.downstream.node == node_idx {
-                let ei = (ed.id).as_usize();
+            if ed.upstream().node() == &node_idx || ed.downstream().node() == &node_idx {
+                let ei = (ed.id()).as_usize();
                 match ei {
                     0 => {
                         out[0] = self.edge_occupancy_for::<0>()?;
@@ -415,7 +401,7 @@ where
         C: PlatformClock + Sized,
         T: Telemetry + Sized,
     {
-        let out0_policy = self.edges.0.policy();
+        let out0_policy = *self.edges.0.policy();
 
         let inputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::InQ; 0] = [/* empty */];
         let outputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1] = [self.edges.0.queue_mut()];
@@ -483,7 +469,7 @@ where
         // Disjoint borrows: nodes and edges are separate fields.
         let node = &mut self.nodes.0;
 
-        let out0_policy = self.edges.0.policy();
+        let out0_policy = *self.edges.0.policy();
 
         let inputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::InQ; 0] = [];
         let outputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1] = [self.edges.0.queue_mut()];
@@ -538,8 +524,8 @@ where
         C: PlatformClock + Sized,
         T: Telemetry + Sized,
     {
-        let in0_policy = self.edges.0.policy();
-        let out1_policy = self.edges.1.policy();
+        let in0_policy = *self.edges.0.policy();
+        let out1_policy = *self.edges.1.policy();
 
         let inputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::InQ; 1] = [self.edges.0.queue_mut()];
         let outputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::OutQ; 1] = [self.edges.1.queue_mut()];
@@ -606,8 +592,8 @@ where
     {
         let node = &mut self.nodes.1;
 
-        let in0_policy = self.edges.0.policy();
-        let out1_policy = self.edges.1.policy();
+        let in0_policy = *self.edges.0.policy();
+        let out1_policy = *self.edges.1.policy();
 
         let inputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::InQ; 1] = [self.edges.0.queue_mut()];
         let outputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::OutQ; 1] = [self.edges.1.queue_mut()];
@@ -662,7 +648,7 @@ where
         C: PlatformClock + Sized,
         T: Telemetry + Sized,
     {
-        let in1_policy = self.edges.1.policy();
+        let in1_policy = *self.edges.1.policy();
 
         let inputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::InQ; 1] = [self.edges.1.queue_mut()];
         let outputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::OutQ; 0] = [/* empty */];
@@ -729,7 +715,7 @@ where
     {
         let node = &mut self.nodes.2;
 
-        let in1_policy = self.edges.1.policy();
+        let in1_policy = *self.edges.1.policy();
 
         let inputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::InQ; 1] = [self.edges.1.queue_mut()];
         let outputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::OutQ; 0] = [];
@@ -879,28 +865,16 @@ pub mod concurrent_graph {
             let e0 = ConcurrentEdgeLink::<Q32, u32>::new(
                 q_0,
                 EdgeIndex::from(1usize),
-                PortId {
-                    node: NodeIndex::from(0usize),
-                    port: PortIndex(0),
-                },
-                PortId {
-                    node: NodeIndex::from(1usize),
-                    port: PortIndex(0),
-                },
+                PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
+                PortId::new(NodeIndex::from(1usize), PortIndex::from(0)),
                 Q_32_POLICY,
                 Some("e0"),
             );
             let e1 = ConcurrentEdgeLink::<Q32, u32>::new(
                 q_1,
                 EdgeIndex::from(2usize),
-                PortId {
-                    node: NodeIndex::from(1usize),
-                    port: PortIndex(0),
-                },
-                PortId {
-                    node: NodeIndex::from(2usize),
-                    port: PortIndex(0),
-                },
+                PortId::new(NodeIndex::from(1usize), PortIndex::from(0)),
+                PortId::new(NodeIndex::from(2usize), PortIndex::from(0)),
                 Q_32_POLICY,
                 Some("e1"),
             );
@@ -926,14 +900,8 @@ pub mod concurrent_graph {
             let ingress_edge_0 = ConcurrentIngressEdgeLink::from_probe(
                 probe_edge_0,
                 EdgeIndex::from(0usize),
-                PortId {
-                    node: EXTERNAL_INGRESS_NODE,
-                    port: PortIndex(0),
-                },
-                PortId {
-                    node: NodeIndex::from(0usize),
-                    port: PortIndex(0),
-                },
+                PortId::new(EXTERNAL_INGRESS_NODE, PortIndex::from(0)),
+                PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
                 INGRESS_POLICIES[0],
                 Some("ingress0"),
             );
@@ -1016,8 +984,8 @@ pub mod concurrent_graph {
         fn get_edge_policies(&self) -> [EdgePolicy; 3] {
             [
                 INGRESS_POLICIES[0],
-                self.edges.0.policy(),
-                self.edges.1.policy(),
+                *self.edges.0.policy(),
+                *self.edges.1.policy(),
             ]
         }
 
@@ -1030,11 +998,11 @@ pub mod concurrent_graph {
                 }
                 1 => {
                     let e = &self.edges.0;
-                    e.occupancy(&e.policy())
+                    e.occupancy(e.policy())
                 }
                 2 => {
                     let e = &self.edges.1;
-                    e.occupancy(&e.policy())
+                    e.occupancy(e.policy())
                 }
                 _ => return Err(GraphError::InvalidEdgeIndex),
             };
@@ -1059,8 +1027,8 @@ pub mod concurrent_graph {
         ) -> Result<(), GraphError> {
             let node_idx = NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
-                if ed.upstream.node == node_idx || ed.downstream.node == node_idx {
-                    match (ed.id).as_usize() {
+                if ed.upstream().node() == &node_idx || ed.downstream().node() == &node_idx {
+                    match (ed.id()).as_usize() {
                         0 => out[0] = self.edge_occupancy_for::<0>()?,
                         1 => out[1] = self.edge_occupancy_for::<1>()?,
                         2 => out[2] = self.edge_occupancy_for::<2>()?,
@@ -1116,7 +1084,7 @@ pub mod concurrent_graph {
             match index {
                 0 => {
                     let node = self.nodes.0.take().ok_or(GraphError::InvalidEdgeIndex)?; // or a NodeIndex error variant if you have it
-                    let out0_policy = self.edges.0.policy();
+                    let out0_policy = *self.edges.0.policy();
                     let out0 = (self.endpoints.0).1.clone();
                     let ingress_updater = self.ingress_updaters[0]
                         .take()
@@ -1130,8 +1098,8 @@ pub mod concurrent_graph {
                 }
                 1 => {
                     let node = self.nodes.1.take().ok_or(GraphError::InvalidEdgeIndex)?;
-                    let in0_policy = self.edges.0.policy();
-                    let out1_policy = self.edges.1.policy();
+                    let in0_policy = *self.edges.0.policy();
+                    let out1_policy = *self.edges.1.policy();
                     let in0 = (self.endpoints.0).0.clone();
                     let out1 = (self.endpoints.1).1.clone();
                     Ok(TestPipelineStdOwnedBundle::N1 {
@@ -1144,7 +1112,7 @@ pub mod concurrent_graph {
                 }
                 2 => {
                     let node = self.nodes.2.take().ok_or(GraphError::InvalidEdgeIndex)?;
-                    let in1_policy = self.edges.1.policy();
+                    let in1_policy = *self.edges.1.policy();
                     let in1 = (self.endpoints.1).0.clone();
                     Ok(TestPipelineStdOwnedBundle::N2 {
                         node,
@@ -1217,7 +1185,7 @@ pub mod concurrent_graph {
                         .node()
                         .source_ref()
                         .ingress_occupancy(&INGRESS_POLICIES[0]);
-                    ingress_updater.update(occ.items, occ.bytes);
+                    ingress_updater.update(*occ.items(), *occ.bytes());
 
                     let inputs: [&mut NoQueue<()>; 0] = [/* empty */];
                     let outputs: [&mut OutEpU32; 1] = [out0];
@@ -1436,7 +1404,7 @@ pub mod concurrent_graph {
             C: PlatformClock + Sized,
             T: Telemetry + Sized,
         {
-            let out0_policy = self.edges.0.policy();
+            let out0_policy = *self.edges.0.policy();
 
             let inputs: [&'graph mut <Self as GraphNodeTypes<0, 0, 1>>::InQ; 0] = [];
             let outputs: [&'graph mut <Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1] =
@@ -1491,7 +1459,7 @@ pub mod concurrent_graph {
             T: Telemetry + Sized,
         {
             let node = self.nodes.0.as_mut().expect("node 0 moved");
-            let out0_policy = self.edges.0.policy();
+            let out0_policy = *self.edges.0.policy();
 
             let inputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::InQ; 0] = [];
             let outputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1] =
@@ -1548,8 +1516,8 @@ pub mod concurrent_graph {
             C: PlatformClock + Sized,
             T: Telemetry + Sized,
         {
-            let in0_policy = self.edges.0.policy();
-            let out1_policy = self.edges.1.policy();
+            let in0_policy = *self.edges.0.policy();
+            let out1_policy = *self.edges.1.policy();
 
             let inputs: [&'graph mut <Self as GraphNodeTypes<1, 1, 1>>::InQ; 1] =
                 [&mut (self.endpoints.0).0];
@@ -1605,8 +1573,8 @@ pub mod concurrent_graph {
             T: Telemetry + Sized,
         {
             let node = self.nodes.1.as_mut().expect("node 1 moved");
-            let in0_policy = self.edges.0.policy();
-            let out1_policy = self.edges.1.policy();
+            let in0_policy = *self.edges.0.policy();
+            let out1_policy = *self.edges.1.policy();
 
             let inputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::InQ; 1] =
                 [&mut (self.endpoints.0).0];
@@ -1664,7 +1632,7 @@ pub mod concurrent_graph {
             C: PlatformClock + Sized,
             T: Telemetry + Sized,
         {
-            let in1_policy = self.edges.1.policy();
+            let in1_policy = *self.edges.1.policy();
 
             let inputs: [&'graph mut <Self as GraphNodeTypes<2, 1, 0>>::InQ; 1] =
                 [&mut (self.endpoints.1).0];
@@ -1719,7 +1687,7 @@ pub mod concurrent_graph {
             T: Telemetry + Sized,
         {
             let node = self.nodes.2.as_mut().expect("node 2 moved");
-            let in1_policy = self.edges.1.policy();
+            let in1_policy = *self.edges.1.policy();
 
             let inputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::InQ; 1] =
                 [&mut (self.endpoints.1).0];
@@ -1767,7 +1735,7 @@ pub mod concurrent_graph {
             <Self as GraphNodeTypes<0, 0, 1>>::OutQ: Send + 'static,
         {
             let node = self.nodes.0.take().expect("node 0 already taken");
-            let out0_policy = self.edges.0.policy();
+            let out0_policy = *self.edges.0.policy();
 
             // clone endpoints (cheap; they share Arc)
             let out0 = (self.endpoints.0).1.clone();
@@ -1807,8 +1775,8 @@ pub mod concurrent_graph {
             <Self as GraphNodeTypes<1, 1, 1>>::OutQ: Send + 'static,
         {
             let node = self.nodes.1.take().expect("node 1 already taken");
-            let in0_policy = self.edges.0.policy();
-            let out1_policy = self.edges.1.policy();
+            let in0_policy = *self.edges.0.policy();
+            let out1_policy = *self.edges.1.policy();
 
             let in0 = (self.endpoints.0).0.clone();
             let out1 = (self.endpoints.1).1.clone();
@@ -1848,7 +1816,7 @@ pub mod concurrent_graph {
             <Self as GraphNodeTypes<2, 1, 0>>::OutQ: Send + 'static,
         {
             let node = self.nodes.2.take().expect("node 2 already taken");
-            let in1_policy = self.edges.1.policy();
+            let in1_policy = *self.edges.1.policy();
             let in1 = (self.endpoints.1).0.clone();
             (node, [in1], [], [in1_policy], [])
         }

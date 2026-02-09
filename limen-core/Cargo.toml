@@ -13,6 +13,10 @@ alloc = []
 std = ["alloc", "dep:ringbuf"]
 spsc_raw = ["std"] # enables SpscAtomicRing (unsafe)
 
+# (Work)bench:
+# - Enables test features and implementations for downstream crates.
+bench = []
+
 [dependencies]
 heapless = { workspace = true }
 ringbuf = { workspace = true, optional = true }

@@ -31,6 +31,7 @@ use crate::types::{DeadlineNs, NodeIndex};
 /// - `ReadyUnderPressure`: some input available AND at least one output watermark is
 ///   `BetweenSoftAndHard` or `AtOrAboveHard`.
 /// - `Ready`: some input available AND all outputs are `BelowSoft`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readiness {
     /// No input available or blocked by backpressure.
@@ -48,16 +49,58 @@ pub enum Readiness {
 ///   if policy provides a default and inputs lack deadlines; otherwise `None`.
 /// - `readiness`: derived from input availability and output pressure (see `Readiness` contract above).
 /// - `backpressure`: the maximum watermark state across all outputs.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSummary {
     /// Index of the node in the graph.
-    pub index: NodeIndex,
+    index: NodeIndex,
     /// Earliest absolute deadline (if any) among its ready inputs.
-    pub earliest_deadline: Option<DeadlineNs>,
+    earliest_deadline: Option<DeadlineNs>,
     /// Readiness level.
-    pub readiness: Readiness,
+    readiness: Readiness,
     /// Current backpressure state from outputs.
-    pub backpressure: WatermarkState,
+    backpressure: WatermarkState,
+}
+
+impl NodeSummary {
+    /// Constructs a new `NodeSummary` from the provided fields.
+    pub const fn new(
+        index: NodeIndex,
+        earliest_deadline: Option<DeadlineNs>,
+        readiness: Readiness,
+        backpressure: WatermarkState,
+    ) -> Self {
+        Self {
+            index,
+            earliest_deadline,
+            readiness,
+            backpressure,
+        }
+    }
+
+    /// Index of the node in the graph.
+    #[inline]
+    pub const fn index(&self) -> &NodeIndex {
+        &self.index
+    }
+
+    /// Earliest absolute deadline (if any) among its ready inputs.
+    #[inline]
+    pub const fn earliest_deadline(&self) -> &Option<DeadlineNs> {
+        &self.earliest_deadline
+    }
+
+    /// Readiness level.
+    #[inline]
+    pub const fn readiness(&self) -> &Readiness {
+        &self.readiness
+    }
+
+    /// Current backpressure state from outputs.
+    #[inline]
+    pub const fn backpressure(&self) -> &WatermarkState {
+        &self.backpressure
+    }
 }
 
 /// A dequeue policy selects the next node to run from a set of summaries.

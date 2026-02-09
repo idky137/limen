@@ -5,7 +5,7 @@ use crate::errors::{NodeErrorKind, RuntimeError, RuntimeInvariantError};
 use crate::event_message;
 use crate::graph::GraphApi;
 use crate::node::StepResult;
-use crate::policy::{BudgetPolicy, DeadlinePolicy, NodePolicy, WatermarkState};
+use crate::policy::{BatchingPolicy, BudgetPolicy, DeadlinePolicy, NodePolicy, WatermarkState};
 use crate::prelude::{PlatformClock, Telemetry};
 
 use super::LimenRuntime;
@@ -35,27 +35,12 @@ where
 {
     /// Construct with a pessimistic initial occupancy; `init()` will overwrite it.
     pub const fn new() -> Self {
-        const INIT_OCC: EdgeOccupancy = EdgeOccupancy {
-            items: 0,
-            bytes: 0,
-            // Any value is fine; init() will replace the whole array.
-            watermark: WatermarkState::AtOrAboveHard,
-        };
-        const INIT_POLICY: NodePolicy = NodePolicy {
-            batching: crate::policy::BatchingPolicy {
-                fixed_n: Some(1),
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
-        };
+        const INIT_OCC: EdgeOccupancy = EdgeOccupancy::new(0, 0, WatermarkState::AtOrAboveHard);
+        const INIT_POLICY: NodePolicy = NodePolicy::new(
+            BatchingPolicy::none(),
+            BudgetPolicy::new(None, None),
+            DeadlinePolicy::new(false, None, None),
+        );
 
         Self {
             stop: false,
@@ -131,7 +116,7 @@ where
                         continue;
                     }
                 }
-                Err(error) => match error.kind {
+                Err(error) => match error.kind() {
                     NodeErrorKind::NoInput | NodeErrorKind::Backpressured => {
                         tried += 1;
                         continue;
@@ -199,13 +184,13 @@ where
 
         if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
             let timestamp_ns = Self::now_nanos(&clock);
-            let event = crate::telemetry::TelemetryEvent::Runtime(
-                crate::telemetry::RuntimeTelemetryEvent {
-                    graph_id: GRAPH_ID,
+            let event = crate::telemetry::TelemetryEvent::runtime(
+                crate::telemetry::RuntimeTelemetryEvent::new(
+                    GRAPH_ID,
                     timestamp_ns,
-                    event_kind: crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
-                    message: None,
-                },
+                    crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
+                    None,
+                ),
             );
             telemetry.push_event(event);
         }
@@ -232,13 +217,13 @@ where
         if let (Some(ref clock), Some(telemetry)) = (&self.clock, self.telemetry.as_mut()) {
             if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
                 let timestamp_ns = Self::now_nanos(clock);
-                let event = crate::telemetry::TelemetryEvent::Runtime(
-                    crate::telemetry::RuntimeTelemetryEvent {
-                        graph_id: GRAPH_ID,
+                let event = crate::telemetry::TelemetryEvent::runtime(
+                    crate::telemetry::RuntimeTelemetryEvent::new(
+                        GRAPH_ID,
                         timestamp_ns,
-                        event_kind: crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
-                        message: Some(event_message!("graph reset")),
-                    },
+                        crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
+                        Some(event_message!("graph reset")),
+                    ),
                 );
                 telemetry.push_event(event);
             }
@@ -256,13 +241,13 @@ where
         if let (Some(ref clock), Some(telemetry)) = (&self.clock, self.telemetry.as_mut()) {
             if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
                 let timestamp_ns = Self::now_nanos(clock);
-                let event = crate::telemetry::TelemetryEvent::Runtime(
-                    crate::telemetry::RuntimeTelemetryEvent {
-                        graph_id: GRAPH_ID,
+                let event = crate::telemetry::TelemetryEvent::runtime(
+                    crate::telemetry::RuntimeTelemetryEvent::new(
+                        GRAPH_ID,
                         timestamp_ns,
-                        event_kind: crate::telemetry::RuntimeTelemetryEventKind::GraphStopped,
-                        message: None,
-                    },
+                        crate::telemetry::RuntimeTelemetryEventKind::GraphStopped,
+                        None,
+                    ),
                 );
                 telemetry.push_event(event);
             }
@@ -390,12 +375,7 @@ pub mod concurrent_runtime {
     {
         /// Construct with a pessimistic initial occupancy; `init()` will overwrite it.
         pub fn new() -> Self {
-            const INIT_OCC: EdgeOccupancy = EdgeOccupancy {
-                items: 0,
-                bytes: 0,
-                // Any value is fine; init()/step() will replace the whole array.
-                watermark: WatermarkState::AtOrAboveHard,
-            };
+            const INIT_OCC: EdgeOccupancy = EdgeOccupancy::new(0, 0, WatermarkState::AtOrAboveHard);
 
             Self {
                 stop: false,
@@ -709,13 +689,13 @@ pub mod concurrent_runtime {
             if let (Some(ref clock), Some(telemetry)) = (&self.clock, self.telemetry.as_mut()) {
                 if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
                     let timestamp_ns = Self::now_nanos(clock);
-                    let event = crate::telemetry::TelemetryEvent::Runtime(
-                        crate::telemetry::RuntimeTelemetryEvent {
-                            graph_id: GRAPH_ID,
+                    let event = crate::telemetry::TelemetryEvent::runtime(
+                        crate::telemetry::RuntimeTelemetryEvent::new(
+                            GRAPH_ID,
                             timestamp_ns,
-                            event_kind: crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
-                            message: None,
-                        },
+                            crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
+                            None,
+                        ),
                     );
                     telemetry.push_event(event);
                 }
@@ -740,13 +720,13 @@ pub mod concurrent_runtime {
             if let (Some(ref clock), Some(telemetry)) = (&self.clock, self.telemetry.as_mut()) {
                 if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
                     let timestamp_ns = Self::now_nanos(clock);
-                    let event = crate::telemetry::TelemetryEvent::Runtime(
-                        crate::telemetry::RuntimeTelemetryEvent {
-                            graph_id: GRAPH_ID,
+                    let event = crate::telemetry::TelemetryEvent::runtime(
+                        crate::telemetry::RuntimeTelemetryEvent::new(
+                            GRAPH_ID,
                             timestamp_ns,
-                            event_kind: crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
-                            message: Some(event_message!("graph reset")),
-                        },
+                            crate::telemetry::RuntimeTelemetryEventKind::GraphStarted,
+                            Some(event_message!("graph reset")),
+                        ),
                     );
                     telemetry.push_event(event);
                 }
@@ -764,13 +744,13 @@ pub mod concurrent_runtime {
             if let (Some(ref clock), Some(telemetry)) = (&self.clock, self.telemetry.as_mut()) {
                 if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
                     let timestamp_ns = Self::now_nanos(clock);
-                    let event = crate::telemetry::TelemetryEvent::Runtime(
-                        crate::telemetry::RuntimeTelemetryEvent {
-                            graph_id: GRAPH_ID,
+                    let event = crate::telemetry::TelemetryEvent::runtime(
+                        crate::telemetry::RuntimeTelemetryEvent::new(
+                            GRAPH_ID,
                             timestamp_ns,
-                            event_kind: crate::telemetry::RuntimeTelemetryEventKind::GraphStopped,
-                            message: None,
-                        },
+                            crate::telemetry::RuntimeTelemetryEventKind::GraphStopped,
+                            None,
+                        ),
                     );
                     telemetry.push_event(event);
                 }

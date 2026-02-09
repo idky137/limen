@@ -31,7 +31,7 @@ use alloc::vec::Vec;
 // --- local helpers: map backend/queue errors into NodeError (no From impls required)
 #[inline]
 fn map_inference_err(e: InferenceError) -> NodeError {
-    NodeError::execution_failed().with_code(e.code)
+    NodeError::execution_failed().with_code(*e.code())
 }
 #[inline]
 fn map_queue_err(e: QueueError) -> NodeError {
@@ -182,8 +182,9 @@ where
         T: Telemetry + Sized,
     {
         // Decide effective batch size.
-        let want = self.node_policy.batching.fixed_n.unwrap_or(1);
-        let cap = self.backend_caps.max_batch.unwrap_or(usize::MAX);
+        let want = self.node_policy.batching().fixed_n().unwrap_or(1);
+        // FIX / TODO: should this unwrap to usize::max?
+        let cap = self.backend_caps.max_batch().unwrap_or(usize::MAX);
         let nmax = core::cmp::min(core::cmp::min(want, cap), MAX_BATCH);
 
         // Single-item fast path (no alloc, no arrays).
@@ -195,7 +196,7 @@ where
                 Err(e) => return Err(map_queue_err(e)),
             };
 
-            let inp: &InP = m_in.payload_ref();
+            let inp: &InP = m_in.payload();
             self.model
                 .infer_one(inp, &mut self.scratch_out)
                 .map_err(map_inference_err)?;
@@ -230,8 +231,8 @@ where
         T: Telemetry,
     {
         // Use configured budget backoff if present; otherwise yield once at "now".
-        if let Some(backoff) = self.node_policy.budget.watchdog_ticks {
-            let until = clock.now_ticks().saturating_add(backoff);
+        if let Some(backoff) = self.node_policy.budget().watchdog_ticks() {
+            let until = clock.now_ticks().saturating_add(*backoff);
             Ok(StepResult::YieldUntil(until))
         } else {
             Ok(StepResult::YieldUntil(clock.now_ticks()))
@@ -301,8 +302,9 @@ where
             return Ok(StepResult::NoInput);
         }
 
-        headers[0].flags = headers[0].flags.first_in_batch();
-        headers[n - 1].flags = headers[n - 1].flags.last_in_batch();
+        // Mark batch boundary flags.
+        headers[0].set_first_in_batch();
+        headers[n - 1].set_last_in_batch();
 
         self.model
             .infer_batch(in_buf.as_slice(), &mut out_buf[..n])
@@ -350,9 +352,9 @@ where
         }
 
         // Mark batch boundary flags.
-        headers[0].flags = headers[0].flags.first_in_batch();
+        headers[0].set_first_in_batch();
         let last = headers.len() - 1;
-        headers[last].flags = headers[last].flags.last_in_batch();
+        headers[last].set_last_in_batch();
 
         // Prepare outputs and run batched inference.
         let mut out_buf: Vec<OutP> = Vec::with_capacity(headers.len());

@@ -33,6 +33,7 @@ use crate::{
 /// # Invariants
 /// Callers should ensure `in_ports == IN as u16` and `out_ports == OUT as u16` so the
 /// stored counts are consistent with the node’s const-generic port arity.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct NodeLink<N, const IN: usize, const OUT: usize, InP, OutP>
 where
@@ -97,19 +98,13 @@ where
     /// Returns the input port ids for the node.
     #[inline]
     pub fn input_port_ids(&self) -> [PortId; IN] {
-        core::array::from_fn(|i| PortId {
-            node: self.id,
-            port: PortIndex(i),
-        })
+        core::array::from_fn(|i| PortId::new(self.id, PortIndex::new(i)))
     }
 
     /// Returns the input port ids for the node.
     #[inline]
     pub fn output_port_ids(&self) -> [PortId; OUT] {
-        core::array::from_fn(|i| PortId {
-            node: self.id,
-            port: PortIndex(i),
-        })
+        core::array::from_fn(|i| PortId::new(self.id, PortIndex::new(i)))
     }
 
     /// Return the node's policy bundle.
@@ -205,8 +200,8 @@ where
 
         // Cache static policy (copy) for deadline/budget checks.
         let policy = self.node.policy();
-        let budget_policy = policy.budget;
-        let deadline_policy = policy.deadline;
+        let budget_policy = policy.budget();
+        let deadline_policy = policy.deadline();
 
         // ---- Execute node step + measure latency ----
         let timestamp_start_ns = ctx.now_nanos();
@@ -218,15 +213,15 @@ where
 
         let mut budget_ns_opt: Option<u64> = None;
 
-        if let Some(default_deadline_ns) = deadline_policy.default_deadline_ns {
-            budget_ns_opt = Some(default_deadline_ns.0);
-        } else if let Some(tick_budget) = budget_policy.tick_budget {
-            let budget_ns = ctx.ticks_to_nanos(tick_budget);
+        if let Some(default_deadline_ns) = deadline_policy.default_deadline_ns() {
+            budget_ns_opt = Some(*default_deadline_ns.as_u64());
+        } else if let Some(tick_budget) = budget_policy.tick_budget() {
+            let budget_ns = ctx.ticks_to_nanos(*tick_budget);
             budget_ns_opt = Some(budget_ns);
         }
 
-        let slack_ns: u64 = match deadline_policy.slack_tolerance_ns {
-            Some(slack) => slack.0,
+        let slack_ns: u64 = match deadline_policy.slack_tolerance_ns() {
+            Some(slack) => *slack.as_u64(),
             None => 0,
         };
 
@@ -251,14 +246,14 @@ where
         // Latency metric (per node, per step).
         // This assumes `NodeIndex` is a tuple struct where `.0` yields a numeric index.
         telemetry.record_latency_ns(
-            TelemetryKey::node(self.id.0 as u32, TelemetryKind::Latency),
+            TelemetryKey::node(*self.id.as_usize() as u32, TelemetryKind::Latency),
             duration_ns,
         );
 
         // Deadline miss counter (only if we computed a budget and exceeded it).
         if deadline_missed {
             telemetry.incr_counter(
-                TelemetryKey::node(self.id.0 as u32, TelemetryKind::DeadlineMiss),
+                TelemetryKey::node(*self.id.as_usize() as u32, TelemetryKind::DeadlineMiss),
                 1,
             );
         }
@@ -269,7 +264,7 @@ where
             match step_result {
                 MadeProgress | Terminal | YieldUntil(_) => {
                     telemetry.incr_counter(
-                        TelemetryKey::node(self.id.0 as u32, TelemetryKind::Processed),
+                        TelemetryKey::node(*self.id.as_usize() as u32, TelemetryKind::Processed),
                         1,
                     );
                 }
@@ -300,7 +295,7 @@ where
                     }
                 }
                 Err(error) => {
-                    Some(match error.kind {
+                    Some(match error.kind() {
                         NodeErrorKind::NoInput => NodeStepError::NoInput,
                         NodeErrorKind::Backpressured => NodeStepError::Backpressured,
                         // Any other error kind is treated as a generic execution failure.
@@ -309,17 +304,17 @@ where
                 }
             };
 
-            let event = TelemetryEvent::NodeStep(NodeStepTelemetry {
-                graph_id: GRAPH_ID,
-                node_index: self.id,
-                node_name: self.name,
+            let event = TelemetryEvent::node_step(NodeStepTelemetry::new(
+                GRAPH_ID,
+                self.id,
+                self.name,
                 timestamp_start_ns,
                 timestamp_end_ns,
                 duration_ns,
                 deadline_ns,
                 deadline_missed,
                 error_kind,
-            });
+            ));
 
             telemetry.push_event(event);
         }
@@ -354,16 +349,67 @@ where
 /// `NodeDescriptor` captures static configuration of a node in the graph:
 /// its identity, kind, port counts, policy, and an optional name.
 /// It does not hold runtime state or implementation details.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct NodeDescriptor {
     /// Unique identifier of this node in the graph.
-    pub id: NodeIndex,
+    id: NodeIndex,
     /// High-level category of the node (source, process, sink, etc).
-    pub kind: NodeKind,
+    kind: NodeKind,
     /// Number of input ports declared by this node.
-    pub in_ports: u16,
+    in_ports: u16,
     /// Number of output ports declared by this node.
-    pub out_ports: u16,
+    out_ports: u16,
     /// Optional static name (for diagnostics or graph tooling).
-    pub name: Option<&'static str>,
+    name: Option<&'static str>,
+}
+
+impl NodeDescriptor {
+    /// Construct a new `NodeDescriptor`.
+    #[inline]
+    pub fn new(
+        id: NodeIndex,
+        kind: NodeKind,
+        in_ports: u16,
+        out_ports: u16,
+        name: Option<&'static str>,
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            in_ports,
+            out_ports,
+            name,
+        }
+    }
+
+    /// Unique identifier of this node in the graph.
+    #[inline]
+    pub fn id(&self) -> &NodeIndex {
+        &self.id
+    }
+
+    /// High-level category of the node (source, process, sink, etc).
+    #[inline]
+    pub fn kind(&self) -> &NodeKind {
+        &self.kind
+    }
+
+    /// Number of input ports declared by this node.
+    #[inline]
+    pub fn in_ports(&self) -> &u16 {
+        &self.in_ports
+    }
+
+    /// Number of output ports declared by this node.
+    #[inline]
+    pub fn out_ports(&self) -> &u16 {
+        &self.out_ports
+    }
+
+    /// Optional static name (for diagnostics or graph tooling).
+    #[inline]
+    pub fn name(&self) -> Option<&'static str> {
+        self.name
+    }
 }

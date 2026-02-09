@@ -182,7 +182,7 @@ where
     fn advance_counters(&mut self) {
         // Wrapping increments are fine for a test source.
         self.next_value_to_emit = self.next_value_to_emit.wrapping_add(1);
-        self.next_sequence = SequenceNumber((self.next_sequence).0.wrapping_add(1));
+        self.next_sequence = SequenceNumber::new(self.next_sequence.as_u64().wrapping_add(1));
     }
 
     /// Consume one unit from the software backlog when we successfully produce.
@@ -246,11 +246,7 @@ where
         // Fallback to software backlog counters.
         let items = self.backlog_items;
         let bytes = self.backlog_bytes;
-        EdgeOccupancy {
-            items,
-            bytes,
-            watermark: policy.watermark(items, bytes),
-        }
+        EdgeOccupancy::new(items, bytes, policy.watermark(items, bytes))
     }
 
     #[inline]
@@ -334,12 +330,7 @@ impl ComputeModel<u32, u32> for TestU32Model {
 
     #[inline]
     fn metadata(&self) -> ModelMetadata {
-        ModelMetadata {
-            preferred_input: MemoryClass::Host,
-            preferred_output: MemoryClass::Host,
-            max_input_bytes: None,
-            max_output_bytes: None,
-        }
+        ModelMetadata::new(MemoryClass::Host, MemoryClass::Host, None, None)
     }
 }
 
@@ -356,11 +347,7 @@ impl ComputeBackend<u32, u32> for TestU32Backend {
 
     #[inline]
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities {
-            device_streams: false,
-            max_batch: Some(usize::MAX),
-            dtype_mask: 0,
-        }
+        BackendCapabilities::new(false, Some(usize::MAX), 0)
     }
 
     #[inline]

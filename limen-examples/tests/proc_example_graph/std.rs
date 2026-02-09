@@ -34,21 +34,11 @@ type StdRuntime = TestStdRuntime<ProcExampleGraphStd, NoStdTestClock, StdTestTel
 
 #[test]
 fn proc_macro_std_pipeline_runs_with_std_runtime() {
-    let node_policy = NodePolicy {
-        batching: BatchingPolicy {
-            fixed_n: None,
-            max_delta_t: None,
-        },
-        budget: BudgetPolicy {
-            tick_budget: None,
-            watchdog_ticks: None,
-        },
-        deadline: DeadlinePolicy {
-            require_absolute_deadline: false,
-            slack_tolerance_ns: None,
-            default_deadline_ns: None,
-        },
-    };
+    let node_policy = NodePolicy::new(
+        BatchingPolicy::none(),
+        BudgetPolicy::new(None, None),
+        DeadlinePolicy::new(false, None, None),
+    );
 
     // clock
     let clock = NoStdLinuxMonotonicClock::new();
@@ -57,8 +47,8 @@ fn proc_macro_std_pipeline_runs_with_std_runtime() {
     let src = TestCounterSourceU32_2::new(
         clock,
         0,
-        TraceId(0u64),
-        SequenceNumber(0u64),
+        TraceId::new(0u64),
+        SequenceNumber::new(0u64),
         None,
         QoSClass::BestEffort,
         MessageFlags::empty(),
@@ -70,21 +60,11 @@ fn proc_macro_std_pipeline_runs_with_std_runtime() {
     let map = MapNode::new(
         TestU32Backend,
         (),
-        NodePolicy {
-            batching: BatchingPolicy {
-                fixed_n: None,
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
-        },
+        NodePolicy::new(
+            BatchingPolicy::none(),
+            BudgetPolicy::new(None, None),
+            DeadlinePolicy::new(false, None, None),
+        ),
         NodeCapabilities::default(),
         [PlacementAcceptance::default()],
         [PlacementAcceptance::default()],
@@ -93,21 +73,11 @@ fn proc_macro_std_pipeline_runs_with_std_runtime() {
 
     let snk = TestSinkNodeU32_2::new(
         NodeCapabilities::default(),
-        NodePolicy {
-            batching: BatchingPolicy {
-                fixed_n: None,
-                max_delta_t: None,
-            },
-            budget: BudgetPolicy {
-                tick_budget: None,
-                watchdog_ticks: None,
-            },
-            deadline: DeadlinePolicy {
-                require_absolute_deadline: false,
-                slack_tolerance_ns: None,
-                default_deadline_ns: None,
-            },
-        },
+        NodePolicy::new(
+            BatchingPolicy::none(),
+            BudgetPolicy::new(None, None),
+            DeadlinePolicy::new(false, None, None),
+        ),
         [PlacementAcceptance::default()],
         |s: &str| println!("--- [***Sink Output***] --- {}", s),
     );
@@ -133,11 +103,7 @@ fn proc_macro_std_pipeline_runs_with_std_runtime() {
 
     // graph remains valid (descriptors intact)
     graph.validate_graph().unwrap();
-    let mut occ: [EdgeOccupancy; 3] = [EdgeOccupancy {
-        items: 0,
-        bytes: 0,
-        watermark: WatermarkState::AtOrAboveHard,
-    }; 3];
+    let mut occ: [EdgeOccupancy; 3] = [EdgeOccupancy::new(0, 0, WatermarkState::AtOrAboveHard); 3];
     graph.write_all_edge_occupancies(&mut occ).unwrap();
     println!(
         "--- [initial_graph_occupancies] --- {:?}\n",

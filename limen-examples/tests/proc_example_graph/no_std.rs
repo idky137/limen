@@ -45,21 +45,11 @@ fn proc_macro_core_pipeline_runs_with_nostd_runtime() {
         }
     };
 
-    let node_policy = NodePolicy {
-        batching: BatchingPolicy {
-            fixed_n: None,
-            max_delta_t: None,
-        },
-        budget: BudgetPolicy {
-            tick_budget: None,
-            watchdog_ticks: None,
-        },
-        deadline: DeadlinePolicy {
-            require_absolute_deadline: false,
-            slack_tolerance_ns: None,
-            default_deadline_ns: None,
-        },
-    };
+    let node_policy = NodePolicy::new(
+        BatchingPolicy::none(),
+        BudgetPolicy::new(None, None),
+        DeadlinePolicy::new(false, None, None),
+    );
 
     // clock
     let clock = NoStdLinuxMonotonicClock::new();
@@ -68,8 +58,8 @@ fn proc_macro_core_pipeline_runs_with_nostd_runtime() {
     let src = TestCounterSourceU32_2::new(
         clock,
         0,
-        TraceId(0u64),
-        SequenceNumber(0u64),
+        TraceId::new(0u64),
+        SequenceNumber::new(0u64),
         None,
         QoSClass::BestEffort,
         MessageFlags::empty(),
@@ -115,11 +105,7 @@ fn proc_macro_core_pipeline_runs_with_nostd_runtime() {
 
     // quick validation + snapshot
     graph.validate_graph().unwrap();
-    let mut occ: [EdgeOccupancy; 3] = [EdgeOccupancy {
-        items: 0,
-        bytes: 0,
-        watermark: WatermarkState::AtOrAboveHard,
-    }; 3];
+    let mut occ: [EdgeOccupancy; 3] = [EdgeOccupancy::new(0, 0, WatermarkState::AtOrAboveHard); 3];
     graph.write_all_edge_occupancies(&mut occ).unwrap();
 
     #[cfg(feature = "std")]
