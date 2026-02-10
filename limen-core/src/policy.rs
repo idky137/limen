@@ -2,14 +2,88 @@
 
 use crate::types::{DeadlineNs, QoSClass, Ticks};
 
+/// Configuration for a sliding window.
+///
+/// A sliding window produces overlapping (or non-overlapping) windows of `size` items,
+/// advancing by `stride` items per step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlidingWindow {
+    /// Number of items in each produced window.
+    size: usize,
+    /// Number of items the window start advances between consecutive windows.
+    stride: usize,
+}
+
+impl SlidingWindow {
+    /// Creates a new sliding window configuration.
+    ///
+    /// `size` is the number of items in each produced window.
+    ///
+    /// `stride` is how many items the window start advances between consecutive windows.
+    ///
+    /// `stride` must be less than or equal to `size`.
+    #[must_use]
+    pub fn new(size: usize, stride: usize) -> Self {
+        debug_assert!(stride <= size, "sliding window requires stride <= size");
+        Self { size, stride }
+    }
+
+    /// Returns the number of items in each produced window.
+    #[must_use]
+    pub fn size(&self) -> &usize {
+        &self.size
+    }
+
+    /// Returns how many items the window start advances between consecutive windows.
+    #[must_use]
+    pub fn stride(&self) -> &usize {
+        &self.stride
+    }
+
+    /// Returns `true` if this sliding window configuration is equivalent to a disjoint policy.
+    ///
+    /// This is the case when `stride == size`, meaning windows do not overlap and each
+    /// step advances by exactly one full window.
+    #[must_use]
+    pub fn is_disjoint_equivalent(&self) -> bool {
+        self.stride == self.size
+    }
+}
+
+/// How batches are formed over an input stream.
+///
+/// The window policy controls how items from a stream are grouped into `Window`s.
+///
+/// - [`WindowKind::Disjoint`] (default): non-overlapping windows; each window consumes
+///   `size` items from the stream and the next window begins immediately after.
+/// - [`WindowKind::Sliding`]: fixed-size windows that advance by a fixed step. Each
+///   produced window contains `size` items, and the next window starts `stride` items
+///   after the previous window start. When `stride == size`, this is equivalent to
+///   [`WindowKind::Disjoint`].
+///
+/// For [`WindowKind::Sliding`], `stride <= size` is expected.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowKind {
+    /// Non-overlapping (disjoint) windows; default.
+    Disjoint,
+    /// Sliding windows: each produced window has `size` items and windows advance
+    /// by `stride` items between steps.
+    Sliding(SlidingWindow),
+}
+
 /// Batch formation policy: fixed-N and/or Δt micro-batching.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchingPolicy {
     /// Fixed number of items per batch (>= 1). If `None`, do not use fixed-N.
     fixed_n: Option<usize>,
+
     /// Maximum micro-batching window in ticks (Δt). If `None`, no Δt cap.
     max_delta_t: Option<Ticks>,
+
+    /// Windowing style: disjoint (default) or sliding (opt-in).
+    window_kind: WindowKind,
 }
 
 impl BatchingPolicy {
@@ -18,6 +92,7 @@ impl BatchingPolicy {
         Self {
             fixed_n: Some(1),
             max_delta_t: None,
+            window_kind: WindowKind::Disjoint,
         }
     }
 
@@ -26,6 +101,7 @@ impl BatchingPolicy {
         Self {
             fixed_n: Some(n),
             max_delta_t: None,
+            window_kind: WindowKind::Disjoint,
         }
     }
 
@@ -34,6 +110,7 @@ impl BatchingPolicy {
         Self {
             fixed_n: None,
             max_delta_t: Some(cap),
+            window_kind: WindowKind::Disjoint,
         }
     }
 
@@ -42,6 +119,41 @@ impl BatchingPolicy {
         Self {
             fixed_n: Some(n),
             max_delta_t: Some(cap),
+            window_kind: WindowKind::Disjoint,
+        }
+    }
+
+    /// Combined fixed-N and Δt caps with explicit window kind (e.g., sliding).
+    #[inline]
+    pub const fn with_window(
+        n: Option<usize>,
+        cap: Option<Ticks>,
+        window_kind: WindowKind,
+    ) -> Self {
+        Self {
+            fixed_n: n,
+            max_delta_t: cap,
+            window_kind,
+        }
+    }
+
+    /// Convenience: fixed-N with explicit window kind.
+    #[inline]
+    pub const fn fixed_with_window(n: usize, window_kind: WindowKind) -> Self {
+        Self {
+            fixed_n: Some(n),
+            max_delta_t: None,
+            window_kind,
+        }
+    }
+
+    /// Convenience: delta-t with explicit window kind.
+    #[inline]
+    pub const fn delta_t_with_window(cap: Ticks, window_kind: WindowKind) -> Self {
+        Self {
+            fixed_n: None,
+            max_delta_t: Some(cap),
+            window_kind,
         }
     }
 
@@ -55,6 +167,26 @@ impl BatchingPolicy {
     #[inline]
     pub const fn max_delta_t(&self) -> &Option<Ticks> {
         &self.max_delta_t
+    }
+
+    /// Return the window kind.
+    #[inline]
+    pub const fn window_kind(&self) -> WindowKind {
+        self.window_kind
+    }
+
+    /// Convenience: whether partial batches (via max_delta_t) are permitted.
+    #[inline]
+    pub const fn allows_partial(&self) -> bool {
+        self.max_delta_t.is_some()
+    }
+
+    /// Convenience: effective 'want' for occupancy decisions.
+    ///
+    /// Returns `Some(n)` when a fixed-N exists, otherwise `None` meaning "no fixed N".
+    #[inline]
+    pub const fn want(&self) -> Option<usize> {
+        self.fixed_n
     }
 }
 
