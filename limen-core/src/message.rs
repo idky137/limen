@@ -4,6 +4,7 @@
 //! [`Payload`]. For simple byte buffers, `&[u8]` or fixed-size arrays can
 //! be used directly because `Payload` is implemented for them.
 
+pub mod batch;
 pub mod payload;
 pub mod tensor;
 
@@ -373,98 +374,5 @@ impl<P: Payload> Message<P> {
     #[inline]
     pub fn into_parts(self) -> (MessageHeader, P) {
         (self.header, self.payload)
-    }
-}
-
-/// A thin batch view over a slice of messages.
-///
-/// Batch formation is runtime-specific; the core only provides
-/// a convenient immutable view for policies and telemetry.
-#[derive(Debug, Copy, Clone)]
-pub struct Batch<'a, P: Payload> {
-    /// The ordered messages in the batch.
-    messages: &'a [Message<P>],
-}
-
-impl<'a, P: Payload> Batch<'a, P> {
-    /// Construct a new batch view over a slice of messages.
-    #[inline]
-    pub const fn new(messages: &'a [Message<P>]) -> Self {
-        Self { messages }
-    }
-
-    /// Return the underlying messages slice.
-    #[inline]
-    pub fn messages(&self) -> &'a [Message<P>] {
-        self.messages
-    }
-
-    /// Return the number of messages in the batch.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.messages.len()
-    }
-
-    /// Return `true` if the batch is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
-    }
-
-    /// Total byte size across message payloads.
-    pub fn total_payload_bytes(&self) -> usize {
-        self.messages
-            .iter()
-            .map(|m| m.header.payload_size_bytes)
-            .sum()
-    }
-
-    /// Iterate over messages.
-    #[inline]
-    pub fn iter(&self) -> core::slice::Iter<'_, Message<P>> {
-        self.messages.iter()
-    }
-
-    /// Convenience: is the first message marked FIRST_IN_BATCH (if present)?
-    #[inline]
-    pub fn first_flagged(&self) -> bool {
-        self.messages
-            .first()
-            .map(|m| m.header.flags.is_first())
-            .unwrap_or(false)
-    }
-
-    /// Convenience: is the last message marked LAST_IN_BATCH (if present)?
-    #[inline]
-    pub fn last_flagged(&self) -> bool {
-        self.messages
-            .last()
-            .map(|m| m.header.flags.is_last())
-            .unwrap_or(false)
-    }
-
-    /// (Optional) Validate flags are consistent with batch boundaries.
-    /// Enable only when you want assertions (e.g., in tests) via a feature flag.
-    // #[cfg(feature = "validate_batches")]
-    #[inline]
-    pub fn assert_flags_consistent(&self) {
-        if self.is_empty() {
-            return;
-        }
-        debug_assert!(
-            self.first_flagged(),
-            "batch: first item missing FIRST_IN_BATCH"
-        );
-        debug_assert!(
-            self.last_flagged(),
-            "batch: last item missing LAST_IN_BATCH"
-        );
-        // Optional: internal items should have neither FIRST nor LAST
-        for m in &self.messages[1..self.messages.len().saturating_sub(1)] {
-            debug_assert!(
-                !m.header.flags.is_first() && !m.header.flags.is_last(),
-                "batch: internal item has boundary flag"
-            );
-        }
     }
 }
