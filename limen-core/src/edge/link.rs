@@ -1,5 +1,7 @@
 //! Edge graph-link and descriptor types.
 
+#[cfg(feature = "std")]
+use crate::edge::PeekResponse;
 use crate::{
     edge::{Edge, EdgeOccupancy, EnqueueResult},
     errors::QueueError,
@@ -150,7 +152,7 @@ where
     }
 
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
         self.queue.try_peek()
     }
 }
@@ -335,17 +337,23 @@ where
         }
     }
 
-    // Cannot return `&Item` through a Mutex guard.
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, crate::errors::QueueError> {
-        Err(crate::errors::QueueError::Empty)
-    }
-
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_cloned(&self) -> Result<Self::Item, crate::errors::QueueError> {
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         match self.buf.lock() {
-            Ok(q) => q.try_peek_cloned(),
+            Ok(q) => match q.try_peek() {
+                Ok(peek) => match peek {
+                    // Convert a borrowed reference into an owned item while holding the lock,
+                    // so the returned PeekResponse::Owned does not borrow from the mutex guard.
+                    PeekResponse::Borrowed(b) => {
+                        let owned = b.clone();
+                        Ok(PeekResponse::Owned(owned))
+                    }
+
+                    #[cfg(feature = "alloc")]
+                    PeekResponse::Owned(o) => Ok(crate::edge::PeekResponse::Owned(o)),
+                },
+                Err(e) => Err(e),
+            },
             Err(_) => Err(crate::errors::QueueError::Poisoned),
         }
     }

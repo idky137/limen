@@ -103,40 +103,20 @@ pub trait Edge {
     fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy;
 
     /// Return `true` if the queue is empty.
-    fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool
+    where
+        Self::Item: Payload,
+    {
         matches!(self.try_peek(), Err(QueueError::Empty))
     }
 
-    /// Peek at the front item without removing it. Default implementation
-    /// uses `try_pop` and re-insert is left to concrete impls; many queues
-    /// will override this to be non-destructive.
-    fn try_peek(&self) -> Result<&Self::Item, QueueError>;
-
-    /// std-only helper: copy the front item without removing it (cheap for `Copy`).
+    /// Peek at the front item without removing it.
     ///
-    /// Default implementation calls `try_peek()` and clones the result.
-    /// Concurrent implementations that cannot return `&Item` across lock
-    /// guards should override this to avoid returning `Unsupported`.
-    #[cfg(feature = "std")]
-    fn try_peek_copied(&self) -> Result<Self::Item, QueueError>
+    /// Returns a `MessagePeek<'_, Self::Item>`. Implementations should prefer
+    /// returning `MessagePeek::Borrowed(&Self::Item)` for zero-copy paths.
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError>
     where
-        Self::Item: Copy,
-    {
-        self.try_peek().copied()
-    }
-
-    /// std-only helper: clone the front item without removing it (heavier than copy).
-    ///
-    /// Default implementation calls `try_peek()` and clones the result.
-    /// Concurrent implementations that cannot return `&Item` across lock
-    /// guards should override this to avoid returning `Unsupported`.
-    #[cfg(feature = "std")]
-    fn try_peek_cloned(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Clone,
-    {
-        self.try_peek().cloned()
-    }
+        Self::Item: Payload;
 }
 
 /// Convenience helper to enqueue a message using policy-derived admission logic.
@@ -154,6 +134,82 @@ pub fn enqueue_with_admission<P: Payload, Q: Edge<Item = Message<P>>>(
     ) {
         AdmissionDecision::Admit => queue.try_push(msg, policy),
         AdmissionDecision::Reject => EnqueueResult::Rejected,
+    }
+}
+
+/// Unified single-item peek result returned by `Edge::try_peek`.
+///
+/// Generic over the *item* type `I` stored in the edge. Two variants only:
+/// - `Borrowed(&'a I)` for zero-copy/no-alloc SPSC paths.
+/// - `Owned(I)` for alloc-enabled fallbacks / concurrent queues.
+///
+/// Callers should use `as_ref()` to get a `&I` regardless of variant.
+/// When `I = Message<P>` additional conveniences are provided (header/payload
+/// access and `into_owned()`).
+#[derive(Debug)]
+pub enum PeekResponse<'a, I: 'a> {
+    /// Borrowed, zero-alloc view into the queue (SPSC / no-alloc).
+    Borrowed(&'a I),
+
+    /// Owned item returned by the queue (alloc required).
+    #[cfg(feature = "alloc")]
+    Owned(I),
+}
+
+impl<'a, I: 'a> AsRef<I> for PeekResponse<'a, I> {
+    #[inline]
+    fn as_ref(&self) -> &I {
+        match self {
+            PeekResponse::Borrowed(r) => r,
+            #[cfg(feature = "alloc")]
+            PeekResponse::Owned(o) => o,
+        }
+    }
+}
+
+/// Convenience methods for the common case where the item is a `Message<P>`.
+impl<'a, P: crate::message::payload::Payload + 'a> PeekResponse<'a, crate::message::Message<P>> {
+    /// Convenience: return the header reference.
+    #[inline]
+    pub fn header(&self) -> &crate::message::MessageHeader {
+        self.as_ref().header()
+    }
+
+    /// Convenience: return the payload reference.
+    #[inline]
+    pub fn payload(&self) -> &P {
+        self.as_ref().payload()
+    }
+
+    /// Convert into an owned `Message<P>`.
+    ///
+    /// - Available when `P: Clone`. This method is **not** gated on `alloc`.
+    /// - If this enum is `Owned` (alloc), the owned value is returned directly.
+    /// - If `Borrowed`, the message is cloned into an owned `Message<P>`.
+    #[inline]
+    pub fn into_owned(self) -> crate::message::Message<P>
+    where
+        P: Clone,
+    {
+        match self {
+            PeekResponse::Borrowed(b) => (*b).clone(),
+            #[cfg(feature = "alloc")]
+            PeekResponse::Owned(o) => o,
+        }
+    }
+}
+
+/// Generic `Clone` impl: clones the owned item when present, otherwise copies the borrow.
+///
+/// This requires `I: Clone` so that the `Owned(I)` variant can be cloned.
+/// Borrowed(&I) is cheap to clone (copies the reference).
+impl<'a, I: Clone + 'a> Clone for PeekResponse<'a, I> {
+    fn clone(&self) -> Self {
+        match self {
+            PeekResponse::Borrowed(r) => PeekResponse::Borrowed(r),
+            #[cfg(feature = "alloc")]
+            PeekResponse::Owned(o) => PeekResponse::Owned(o.clone()),
+        }
     }
 }
 
@@ -198,8 +254,12 @@ impl<P: Payload> Edge for NoQueue<P> {
             watermark: WatermarkState::AtOrAboveHard,
         }
     }
+
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
         Err(QueueError::Empty)
     }
 }

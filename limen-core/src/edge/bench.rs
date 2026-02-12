@@ -146,11 +146,16 @@ impl<T: Clone, const N: usize> Edge for TestSpscRingBuf<T, N> {
         self.len == 0
     }
 
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: crate::message::payload::Payload,
+    {
         if self.len == 0 {
             return Err(QueueError::Empty);
         }
-        Ok(self.buf[self.head].as_ref().expect("len>0 guarantees Some"))
+        Ok(crate::edge::PeekResponse::Borrowed(
+            self.buf[self.head].as_ref().expect("len>0 guarantees Some"),
+        ))
     }
 }
 

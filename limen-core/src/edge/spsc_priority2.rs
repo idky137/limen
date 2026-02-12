@@ -74,9 +74,9 @@ where
         }
     }
 
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
         match self.hi.try_peek() {
-            Ok(r) => Ok(r),
+            Ok(pr) => Ok(pr),
             Err(QueueError::Empty) => self.lo.try_peek(),
             Err(e) => Err(e),
         }

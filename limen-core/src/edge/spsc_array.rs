@@ -3,7 +3,7 @@
 //! Uses a fixed-size [Option<T>; N] ring. No unsafe; no heap.
 //! Tracks both item and byte occupancy; supports DropOldest between watermarks.
 
-use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
@@ -111,11 +111,14 @@ impl<P: Payload + Clone, const N: usize> Edge for StaticRing<Message<P>, N> {
         }
     }
 
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         if self.len == 0 {
             return Err(QueueError::Empty);
         }
-        self.buf[self.head].as_ref().ok_or(QueueError::Empty)
+        match self.buf[self.head].as_ref() {
+            Some(msg) => Ok(PeekResponse::Borrowed(msg)),
+            None => Err(QueueError::Empty),
+        }
     }
 }
 

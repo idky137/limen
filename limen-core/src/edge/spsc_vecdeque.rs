@@ -5,7 +5,7 @@
 
 use alloc::collections::VecDeque;
 
-use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
@@ -95,8 +95,10 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
             watermark,
         }
     }
-
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
-        self.buf.front().ok_or(QueueError::Empty)
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
+        match self.buf.front() {
+            Some(msg) => Ok(PeekResponse::Borrowed(msg)),
+            None => Err(QueueError::Empty),
+        }
     }
 }

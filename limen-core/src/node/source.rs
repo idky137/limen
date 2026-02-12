@@ -298,7 +298,8 @@ where
     }
 
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+        // No buffering — nothing to peek at.
         Err(QueueError::Empty)
     }
 
@@ -385,7 +386,8 @@ where
         Err(QueueError::Empty)
     }
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+        // Synthetic ingress monitor has no item to peek.
         Err(QueueError::Empty)
     }
     #[inline]
@@ -495,7 +497,8 @@ pub mod probe {
         }
 
         #[inline]
-        fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+        fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+            // Probe is a monitor only; no peekable item.
             Err(QueueError::Empty)
         }
 
@@ -631,7 +634,8 @@ pub mod probe {
             Err(QueueError::Empty)
         }
         #[inline]
-        fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+        fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+            // Concurrent probe exposes occupancy only.
             Err(QueueError::Empty)
         }
         #[inline]

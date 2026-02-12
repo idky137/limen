@@ -218,8 +218,14 @@ where
     }
 
     /// Attempt to peek at the front item without removing it.
+    ///
+    /// Returns a `PeekResponse<'_, Message<InP>>` so callers can handle
+    /// both borrowed (zero-copy) and owned (alloc/clone) peek paths.
     #[inline]
-    pub fn in_try_peek(&self, i: usize) -> Result<&Message<InP>, QueueError> {
+    pub fn in_try_peek(
+        &self,
+        i: usize,
+    ) -> Result<crate::edge::PeekResponse<'_, Message<InP>>, QueueError> {
         debug_assert!(i < IN);
         self.inputs[i].try_peek()
     }

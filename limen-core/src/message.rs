@@ -8,7 +8,9 @@ pub mod batch;
 pub mod payload;
 pub mod tensor;
 
-use crate::memory::MemoryClass;
+use core::mem;
+
+use crate::memory::{BufferDescriptor, MemoryClass};
 use crate::message::payload::Payload;
 use crate::types::{DeadlineNs, QoSClass, SequenceNumber, Ticks, TraceId};
 
@@ -374,5 +376,29 @@ impl<P: Payload> Message<P> {
     #[inline]
     pub fn into_parts(self) -> (MessageHeader, P) {
         (self.header, self.payload)
+    }
+}
+
+impl<P: Payload> Payload for Message<P> {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        let payload_desc = self.payload.buffer_descriptor();
+        // Add header size to the payload byte size, keep the payload memory class.
+        BufferDescriptor::new(
+            *payload_desc.bytes() + mem::size_of::<MessageHeader>(),
+            *payload_desc.class(),
+        )
+    }
+}
+
+// Also useful: implement for borrowed Message references to match other impls above.
+impl<'a, P: Payload + 'a> Payload for &'a Message<P> {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        let payload_desc = self.payload.buffer_descriptor();
+        BufferDescriptor::new(
+            *payload_desc.bytes() + mem::size_of::<MessageHeader>(),
+            *payload_desc.class(),
+        )
     }
 }

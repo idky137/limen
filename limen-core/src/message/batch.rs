@@ -11,9 +11,12 @@
 //! and a borrowed, stack/heapless-friendly variant so the runtime can operate
 //! in both `alloc` and `no-alloc` builds.
 
-use crate::message::{payload::Payload, Message, MessageHeader};
+use crate::{
+    memory::{BufferDescriptor, MemoryClass},
+    message::{payload::Payload, Message, MessageHeader},
+};
 
-use core::slice;
+use core::{mem, slice};
 
 /// A thin batch view over a slice of messages.
 ///
@@ -105,6 +108,33 @@ impl<'a, P: Payload> Batch<'a, P> {
                 "batch: internal item has boundary flag"
             );
         }
+    }
+}
+
+impl<'a, P: Payload> Payload for Batch<'a, P> {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        // Sum payload bytes across messages and add header size per message.
+        let total_payload_bytes: usize = self
+            .messages
+            .iter()
+            .map(|m| {
+                // Use the header field stored on message as the authoritative payload size.
+                // This avoids re-inspecting m.payload() which might be expensive for some payloads.
+                m.header.payload_size_bytes
+            })
+            .sum();
+
+        let header_bytes = self.messages.len() * mem::size_of::<MessageHeader>();
+        BufferDescriptor::new(total_payload_bytes + header_bytes, MemoryClass::Host)
+    }
+}
+
+// Provide also for borrowed Batch reference to match other Payload impls pattern.
+impl<'a, P: Payload> Payload for &'a Batch<'a, P> {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        (*self).buffer_descriptor()
     }
 }
 
@@ -237,6 +267,37 @@ where
     #[inline]
     pub fn into_batch_ref(&self) -> Batch<'_, P> {
         self.as_batch()
+    }
+}
+
+impl<'a, P: Payload> Payload for BatchView<'a, P> {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        // We'll iterate the messages according to the variant and compute the same aggregate.
+        match self {
+            #[cfg(feature = "alloc")]
+            BatchView::Owned(v) => {
+                let total_payload_bytes: usize =
+                    v.iter().map(|m| m.header.payload_size_bytes).sum();
+                let header_bytes = v.len() * mem::size_of::<MessageHeader>();
+                BufferDescriptor::new(total_payload_bytes + header_bytes, MemoryClass::Host)
+            }
+
+            BatchView::Borrowed(buf, n) => {
+                let total_payload_bytes: usize =
+                    buf[..*n].iter().map(|m| m.header.payload_size_bytes).sum();
+                let header_bytes = *n * mem::size_of::<MessageHeader>();
+                BufferDescriptor::new(total_payload_bytes + header_bytes, MemoryClass::Host)
+            }
+        }
+    }
+}
+
+// Borrowed ref as well
+impl<'a, P: Payload> Payload for &'a BatchView<'a, P> {
+    #[inline]
+    fn buffer_descriptor(&self) -> BufferDescriptor {
+        (*self).buffer_descriptor()
     }
 }
 

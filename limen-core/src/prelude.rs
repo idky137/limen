@@ -7,7 +7,7 @@ pub use crate::edge::{
 pub use crate::errors::*;
 pub use crate::graph::{validate::*, *};
 pub use crate::memory::*;
-pub use crate::message::{payload::*, tensor::*, *};
+pub use crate::message::{batch::*, payload::*, tensor::*, *};
 pub use crate::node::{
     link::*, model::*, sink::*, source::*, Node, NodeCapabilities, NodeKind, StepContext,
     StepResult,

@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
+use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{EdgePolicy, WatermarkState};
@@ -66,34 +66,25 @@ where
         }
     }
 
-    // Cannot return `&Item` through a Mutex guard.
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
-        Err(QueueError::Unsupported)
-    }
-
-    // Prefer COPY peek when Item: Copy (e.g., Message<TensorRef<'_>>)
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_copied(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Copy,
-    {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
         match self.inner.lock() {
-            Ok(q) => q.try_peek_copied(),
-            Err(_) => Err(QueueError::Poisoned),
-        }
-    }
+            Ok(q) => match q.try_peek() {
+                Ok(peek) => match peek {
+                    // If inner returned a borrowed reference, clone the item while we hold
+                    // the lock and return an owned copy so the returned reference doesn't
+                    // outlive the mutex guard.
+                    crate::edge::PeekResponse::Borrowed(b) => {
+                        let owned = b.clone();
+                        Ok(crate::edge::PeekResponse::Owned(owned))
+                    }
 
-    // Fallback CLONE peek when Item: Clone
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_cloned(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Clone,
-    {
-        match self.inner.lock() {
-            Ok(q) => q.try_peek_cloned(),
+                    // If inner returned an owned item we can forward it directly.
+                    #[cfg(feature = "alloc")]
+                    crate::edge::PeekResponse::Owned(o) => Ok(crate::edge::PeekResponse::Owned(o)),
+                },
+                Err(e) => Err(e),
+            },
             Err(_) => Err(QueueError::Poisoned),
         }
     }
@@ -157,24 +148,8 @@ where
         self.q.occupancy(policy)
     }
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         Err(QueueError::Unsupported)
-    }
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_copied(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Copy,
-    {
-        self.q.try_peek_copied()
-    }
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_cloned(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Clone,
-    {
-        self.q.try_peek_cloned()
     }
 }
 
@@ -227,23 +202,7 @@ where
         self.q.occupancy(policy)
     }
     #[inline]
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         self.q.try_peek()
-    }
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_copied(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Copy,
-    {
-        self.q.try_peek_copied()
-    }
-    #[cfg(feature = "std")]
-    #[inline]
-    fn try_peek_cloned(&self) -> Result<Self::Item, QueueError>
-    where
-        Self::Item: Clone,
-    {
-        self.q.try_peek_cloned()
     }
 }

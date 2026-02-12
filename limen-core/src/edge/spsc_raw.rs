@@ -178,7 +178,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         }
     }
 
-    fn try_peek(&self) -> Result<&Self::Item, QueueError> {
+    fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
         if self.len() == 0 {
             return Err(QueueError::Empty);
         }
@@ -186,7 +186,10 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         let idx = h & self.mask();
         let base: *const MaybeUninit<Self::Item> = self.buf.as_ptr();
         let slot: *const Self::Item = unsafe { base.add(idx) as *const Self::Item };
-        // SAFETY: Producer writes only after consumer advances `head`.
-        Ok(unsafe { &*slot })
+        // SAFETY: Producer writes only after consumer advances `head`. Under the
+        // single-producer/single-consumer discipline this reference is valid for
+        // the borrow of &self.
+        let r = unsafe { &*slot };
+        Ok(crate::edge::PeekResponse::Borrowed(r))
     }
 }
