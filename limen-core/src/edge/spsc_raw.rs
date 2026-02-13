@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
+use crate::policy::EdgePolicy;
+use crate::prelude::AdmissionDecision;
 use crate::prelude::BatchView;
 
 /// A high-performance, bounded, single-producer single-consumer ring buffer.
@@ -148,7 +149,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         let decision = self.get_admission_decision(policy, &item);
 
         // Item bytes (header.payload_size_bytes is used elsewhere in this module).
-        let item_bytes = item.header.payload_size_bytes;
+        let item_bytes = item.header().payload_size_bytes();
 
         match decision {
             AdmissionDecision::Admit => {
@@ -160,7 +161,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
                 }
 
                 // Publish bytes then write the item.
-                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
+                self.bytes_in_queue.fetch_add(*item_bytes, Ordering::AcqRel);
                 self.push_raw(item);
                 EnqueueResult::Enqueued
             }
@@ -182,7 +183,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
                     }
                     let ev = self.pop_raw();
                     self.bytes_in_queue
-                        .fetch_sub(ev.header.payload_size_bytes, Ordering::AcqRel);
+                        .fetch_sub(*ev.header().payload_size_bytes(), Ordering::AcqRel);
                 }
 
                 // Check if we can now accept the item.
@@ -192,7 +193,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
                     return EnqueueResult::Rejected;
                 }
 
-                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
+                self.bytes_in_queue.fetch_add(*item_bytes, Ordering::AcqRel);
                 self.push_raw(item);
                 EnqueueResult::Enqueued
             }
@@ -206,11 +207,11 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
                 {
                     let ev = self.pop_raw();
                     self.bytes_in_queue
-                        .fetch_sub(ev.header.payload_size_bytes, Ordering::AcqRel);
+                        .fetch_sub(*ev.header().payload_size_bytes(), Ordering::AcqRel);
                 }
 
                 // If single item cannot fit in an empty queue, reject.
-                if policy.caps.at_or_above_hard(0, item_bytes) {
+                if policy.caps.at_or_above_hard(0, *item_bytes) {
                     return EnqueueResult::Rejected;
                 }
 
@@ -221,7 +222,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
                     return EnqueueResult::Rejected;
                 }
 
-                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
+                self.bytes_in_queue.fetch_add(*item_bytes, Ordering::AcqRel);
                 self.push_raw(item);
                 EnqueueResult::Enqueued
             }
@@ -234,7 +235,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         }
         let item = self.pop_raw();
         self.bytes_in_queue
-            .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+            .fetch_sub(*item.header().payload_size_bytes(), Ordering::AcqRel);
         Ok(item)
     }
 
@@ -326,7 +327,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
             for _ in 0..take_n {
                 let item = self.pop_raw();
                 self.bytes_in_queue
-                    .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+                    .fetch_sub(*item.header().payload_size_bytes(), Ordering::AcqRel);
                 out.push(item);
             }
 
@@ -353,7 +354,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
             for _ in 0..stride_to_pop {
                 let item = self.pop_raw();
                 self.bytes_in_queue
-                    .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+                    .fetch_sub(*item.header().payload_size_bytes(), Ordering::AcqRel);
                 out.push(item);
             }
 
@@ -379,7 +380,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         for _ in 0..take_n {
             let item = self.pop_raw();
             self.bytes_in_queue
-                .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+                .fetch_sub(*item.header().payload_size_bytes(), Ordering::AcqRel);
             out.push(item);
         }
 
