@@ -140,40 +140,44 @@ impl<'a, P: Payload> Payload for &'a Batch<'a, P> {
 
 /// An internal batch container used by the runtime/nodelink/stepcontext.
 ///
-/// - `Owned(Vec<Message<P>>)`: when `alloc` feature is enabled and we can own a Vec.
-/// - `Borrowed(&'a mut [Message<P>], len)`: stack/heapless-backed buffer with explicit length.
+/// Generic over the stored item `I`. Commonly `I = Message<P>`, but by using a
+/// stored-item generic the same type works for any Edge whose `Item` is a
+/// `Payload`-implementing type.
+///
+/// - `Owned(Vec<I>)`: when `alloc` feature is enabled and we can own a Vec.
+/// - `Borrowed(&'a mut [I], len)`: stack/heapless-backed buffer with explicit length.
 #[derive(Debug)]
-pub enum BatchView<'a, P>
+pub enum BatchView<'a, I>
 where
-    P: Payload,
+    I: Payload,
 {
-    /// Owned variant (alloc-enabled). Stores the entire `Vec<Message<P>>`.
+    /// Owned variant (alloc-enabled). Stores the entire `Vec<I>`.
     #[cfg(feature = "alloc")]
-    Owned(alloc::vec::Vec<Message<P>>),
+    Owned(alloc::vec::Vec<I>),
 
     /// Borrowed variant: a mutable slice plus a length indicating the valid prefix.
-    Borrowed(&'a mut [Message<P>], usize),
+    Borrowed(&'a mut [I], usize),
 }
 
-impl<'a, P> BatchView<'a, P>
+impl<'a, I> BatchView<'a, I>
 where
-    P: Payload,
+    I: Payload,
 {
     /// Construct from an owned Vec (alloc feature required).
     #[cfg(feature = "alloc")]
     #[inline]
-    pub fn from_owned(v: alloc::vec::Vec<Message<P>>) -> Self {
+    pub fn from_owned(v: alloc::vec::Vec<I>) -> Self {
         BatchView::Owned(v)
     }
 
     /// Construct from a borrowed slice + length.
     #[inline]
-    pub fn from_borrowed(buf: &'a mut [Message<P>], len: usize) -> Self {
+    pub fn from_borrowed(buf: &'a mut [I], len: usize) -> Self {
         debug_assert!(len <= buf.len());
         BatchView::Borrowed(buf, len)
     }
 
-    /// Number of messages in the batch.
+    /// Number of items in the batch.
     #[inline]
     pub fn len(&self) -> usize {
         match self {
@@ -189,9 +193,9 @@ where
         self.len() == 0
     }
 
-    /// Immutable iterator over messages.
+    /// Immutable iterator over items.
     #[inline]
-    pub fn iter(&self) -> slice::Iter<'_, Message<P>> {
+    pub fn iter(&self) -> slice::Iter<'_, I> {
         match self {
             #[cfg(feature = "alloc")]
             BatchView::Owned(v) => v.as_slice().iter(),
@@ -199,20 +203,22 @@ where
         }
     }
 
-    /// Mutable iterator over messages (rarely used externally).
+    /// Mutable iterator over items.
     #[inline]
-    pub fn iter_mut(&mut self) -> slice::IterMut<'_, Message<P>> {
+    pub fn iter_mut(&mut self) -> slice::IterMut<'_, I> {
         match self {
             #[cfg(feature = "alloc")]
             BatchView::Owned(v) => v.as_mut_slice().iter_mut(),
             BatchView::Borrowed(buf, n) => buf[..*n].iter_mut(),
         }
     }
+}
 
+/// Special-case helpers for the common stored-item type: `Message<P>`.
+impl<'a, P: Payload> BatchView<'a, Message<P>> {
     /// Convert to the public, borrowed `Batch<'_, P>` view.
     ///
-    /// The returned `Batch` borrows from `self` (i.e., the `BatchView` must
-    /// remain alive for the duration of the `Batch` borrow).
+    /// This is only available when the stored item is `Message<P>`.
     #[inline]
     pub fn as_batch(&self) -> Batch<'_, P> {
         let slice: &[Message<P>] = match self {
@@ -250,42 +256,82 @@ where
         })
     }
 
-    /// Consume and return the owned Vec if present (alloc-only).
-    ///
-    /// Returns `Some(Vec<Message<P>>)` for the Owned variant, otherwise `None`.
-    #[cfg(feature = "alloc")]
-    #[inline]
-    pub fn into_owned_vec(self) -> Option<alloc::vec::Vec<Message<P>>> {
-        match self {
-            BatchView::Owned(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// Try to convert into a borrowed Batch<'_, P> while keeping `self` alive.
+    /// Try to convert into a borrowed `Batch<'_, P>` while keeping `self` alive.
     /// Equivalent to `self.as_batch()` but offered for clarity.
     #[inline]
     pub fn into_batch_ref(&self) -> Batch<'_, P> {
         self.as_batch()
     }
+
+    /// Convert this batch view into an owned batch view.
+    ///
+    /// This is required by mutex-backed edges: a borrowed batch cannot escape the lock guard.
+    ///
+    /// Semantics:
+    /// - If already `Owned`, the inner `Vec` is forwarded.
+    /// - If `Borrowed`, the valid prefix is cloned into a new `Vec`.
+    ///
+    /// The returned `BatchView` is `Owned` and does not borrow from the original `'a`.
+    #[cfg(feature = "alloc")]
+    #[inline]
+    pub fn into_owned<'b>(self) -> BatchView<'b, Message<P>>
+    where
+        Message<P>: Clone,
+    {
+        match self {
+            BatchView::Owned(v) => BatchView::<'b, Message<P>>::Owned(v),
+            BatchView::Borrowed(buf, n) => {
+                let mut v: alloc::vec::Vec<Message<P>> = alloc::vec::Vec::with_capacity(n);
+                for m in &buf[..n] {
+                    v.push(m.clone());
+                }
+                BatchView::<'b, Message<P>>::Owned(v)
+            }
+        }
+    }
+
+    /// Consume and return an owned `Vec<Message<P>>`.
+    ///
+    /// - If this `BatchView` is `Owned`, returns the inner Vec without copying.
+    /// - If this `BatchView` is `Borrowed`, clones the valid prefix into a new Vec.
+    ///
+    /// Alloc-only.
+    #[cfg(feature = "alloc")]
+    #[inline]
+    pub fn into_vec(self) -> alloc::vec::Vec<Message<P>>
+    where
+        P: Clone,
+    {
+        match self {
+            BatchView::Owned(v) => v,
+            BatchView::Borrowed(buf, n) => {
+                let mut v = alloc::vec::Vec::with_capacity(n);
+                for m in &buf[..n] {
+                    v.push(m.clone());
+                }
+                v
+            }
+        }
+    }
 }
 
-impl<'a, P: Payload> Payload for BatchView<'a, P> {
+impl<'a, P: Payload> Payload for BatchView<'a, Message<P>> {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
-        // We'll iterate the messages according to the variant and compute the same aggregate.
         match self {
             #[cfg(feature = "alloc")]
             BatchView::Owned(v) => {
                 let total_payload_bytes: usize =
-                    v.iter().map(|m| m.header.payload_size_bytes).sum();
+                    v.iter().map(|m| m.header().payload_size_bytes).sum();
                 let header_bytes = v.len() * mem::size_of::<MessageHeader>();
                 BufferDescriptor::new(total_payload_bytes + header_bytes, MemoryClass::Host)
             }
 
             BatchView::Borrowed(buf, n) => {
-                let total_payload_bytes: usize =
-                    buf[..*n].iter().map(|m| m.header.payload_size_bytes).sum();
+                let total_payload_bytes: usize = buf[..*n]
+                    .iter()
+                    .map(|m| m.header().payload_size_bytes)
+                    .sum();
                 let header_bytes = *n * mem::size_of::<MessageHeader>();
                 BufferDescriptor::new(total_payload_bytes + header_bytes, MemoryClass::Host)
             }
@@ -294,7 +340,7 @@ impl<'a, P: Payload> Payload for BatchView<'a, P> {
 }
 
 // Borrowed ref as well
-impl<'a, P: Payload> Payload for &'a BatchView<'a, P> {
+impl<'a, P: Payload> Payload for &'a BatchView<'a, Message<P>> {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         (*self).buffer_descriptor()
@@ -416,7 +462,7 @@ mod tests {
         assert!(batch2.last_flagged());
 
         // Consume the owned vec
-        let ov = bv.into_owned_vec().expect("owned vec present");
+        let ov = bv.into_vec();
         assert_eq!(ov.len(), 3);
         // Confirm the final payload value (42) survived.
         assert_eq!(*ov.last().unwrap().payload(), 42u32);

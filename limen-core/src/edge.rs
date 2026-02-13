@@ -2,7 +2,8 @@
 
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{AdmissionDecision, EdgePolicy, WatermarkState};
+use crate::policy::{AdmissionDecision, BatchingPolicy, EdgePolicy, WatermarkState};
+use crate::prelude::BatchView;
 
 pub mod link;
 
@@ -115,6 +116,23 @@ pub trait Edge {
     /// Returns a `MessagePeek<'_, Self::Item>`. Implementations should prefer
     /// returning `MessagePeek::Borrowed(&Self::Item)` for zero-copy paths.
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload;
+
+    /// Attempt to pop a batch of items according to the provided batching policy.
+    ///
+    /// The returned `BatchView<'_, Self::Item>` is allowed to borrow from `self`
+    /// (for zero-copy / heapless implementations) or to be an owned collection
+    /// (when allocation is available). The lifetime of the `BatchView` is tied
+    /// to `&mut self`, so callers must not outlive the borrow.
+    ///
+    /// Implementations MUST honour the semantics of `BatchingPolicy` (fixed-N,
+    /// max-Δt partial batches, and windowing style). Error handling mirrors
+    /// `try_pop` and should return a `QueueError` on failure (including empty).
+    fn try_pop_batch(
+        &mut self,
+        policy: &BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
     where
         Self::Item: Payload;
 }
@@ -257,6 +275,17 @@ impl<P: Payload> Edge for NoQueue<P> {
 
     #[inline]
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        Err(QueueError::Empty)
+    }
+
+    #[inline]
+    fn try_pop_batch(
+        &mut self,
+        _policy: &BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
     where
         Self::Item: Payload,
     {

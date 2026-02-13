@@ -13,6 +13,7 @@ use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
+use crate::prelude::BatchView;
 
 /// A high-performance, bounded, single-producer single-consumer ring buffer.
 ///
@@ -114,6 +115,20 @@ impl<T> SpscAtomicRing<T> {
         self.head.store(h.wrapping_add(1), Ordering::Release);
         item
     }
+
+    /// Borrow a reference to the item at `head + offset` without advancing head.
+    ///
+    /// # Safety
+    /// Requires SPSC discipline. The returned reference must not outlive `&self`
+    /// and is only valid while the corresponding slot remains logically occupied.
+    #[inline]
+    fn peek_ref_at_offset(&self, offset: usize) -> &T {
+        let h = self.head.load(Ordering::Acquire);
+        let idx = h.wrapping_add(offset) & self.mask();
+        let base: *const MaybeUninit<T> = self.buf.as_ptr();
+        let slot: *const T = unsafe { base.add(idx) as *const T };
+        unsafe { &*slot }
+    }
 }
 
 impl<T> Drop for SpscAtomicRing<T> {
@@ -191,5 +206,127 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         // the borrow of &self.
         let r = unsafe { &*slot };
         Ok(crate::edge::PeekResponse::Borrowed(r))
+    }
+
+    fn try_pop_batch(
+        &mut self,
+        policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        use crate::policy::WindowKind;
+
+        let available = self.len();
+        if available == 0 {
+            return Err(QueueError::Empty);
+        }
+
+        let fixed_opt = *policy.fixed_n();
+        let delta_t_opt = *policy.max_delta_t();
+        let window_kind = policy.window_kind();
+
+        // If both caps are absent, treat as fixed_n = 1.
+        let effective_fixed: Option<usize> = if fixed_opt.is_none() && delta_t_opt.is_none() {
+            Some(1)
+        } else {
+            fixed_opt
+        };
+
+        // Compute how many items are within max_delta_t relative to the front, if any.
+        let mut delta_count = available;
+        if let Some(cap) = delta_t_opt {
+            let front_ticks = *self.peek_ref_at_offset(0).header().creation_tick();
+            let mut c = 0usize;
+            while c < available {
+                let tick = *self.peek_ref_at_offset(c).header().creation_tick();
+                let delta = tick.saturating_sub(front_ticks);
+                if delta <= cap {
+                    c += 1;
+                } else {
+                    break;
+                }
+            }
+            delta_count = c;
+        }
+
+        // Apply effective fixed-N cap if present.
+        let apply_fixed = |limit: usize| -> usize {
+            if let Some(n) = effective_fixed {
+                core::cmp::min(limit, n)
+            } else {
+                limit
+            }
+        };
+
+        // --- Disjoint windows: pop up to fixed / delta_count.
+        if let WindowKind::Disjoint = window_kind {
+            let take_n = apply_fixed(core::cmp::min(available, delta_count));
+            if take_n == 0 {
+                return Err(QueueError::Empty);
+            }
+
+            let mut out: alloc::vec::Vec<Self::Item> = alloc::vec::Vec::with_capacity(take_n);
+            for _ in 0..take_n {
+                let item = self.pop_raw();
+                self.bytes_in_queue
+                    .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+                out.push(item);
+            }
+
+            return Ok(BatchView::from_owned(out));
+        }
+
+        // --- Sliding windows: present `size` but pop `stride`.
+        if let WindowKind::Sliding(sw) = window_kind {
+            let stride = *sw.stride();
+            let size = *sw.size();
+
+            let mut max_present = core::cmp::min(available, size);
+            max_present = apply_fixed(core::cmp::min(max_present, delta_count));
+
+            if max_present == 0 {
+                return Err(QueueError::Empty);
+            }
+
+            let stride_to_pop = core::cmp::min(stride, available);
+
+            let mut out: alloc::vec::Vec<Self::Item> = alloc::vec::Vec::with_capacity(max_present);
+
+            // Pop (move) the first `stride_to_pop` items.
+            for _ in 0..stride_to_pop {
+                let item = self.pop_raw();
+                self.bytes_in_queue
+                    .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+                out.push(item);
+            }
+
+            // For the remainder, clone from the queue without advancing head.
+            // These are "peeked" items for sliding semantics.
+            for i in stride_to_pop..max_present {
+                let cloned = self.peek_ref_at_offset(i - stride_to_pop).clone();
+                out.push(cloned);
+            }
+
+            return Ok(BatchView::from_owned(out));
+        }
+
+        // --- Fixed-N and/or max_delta_t (non-sliding, non-disjoint).
+        let mut take_n = core::cmp::min(available, delta_count);
+        take_n = apply_fixed(take_n);
+
+        if take_n == 0 {
+            return Err(QueueError::Empty);
+        }
+
+        let mut out: alloc::vec::Vec<Self::Item> = alloc::vec::Vec::with_capacity(take_n);
+        for _ in 0..take_n {
+            let item = self.pop_raw();
+            self.bytes_in_queue
+                .fetch_sub(item.header.payload_size_bytes, Ordering::AcqRel);
+            out.push(item);
+        }
+
+        Ok(BatchView::from_owned(out))
     }
 }

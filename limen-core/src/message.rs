@@ -402,3 +402,10 @@ impl<'a, P: Payload + 'a> Payload for &'a Message<P> {
         )
     }
 }
+
+impl<P: Payload + Clone + Default> Default for Message<P> {
+    /// Default `Message<P>` constructed from an empty header and `P::default()`.
+    fn default() -> Self {
+        Message::new(MessageHeader::empty(), P::default())
+    }
+}

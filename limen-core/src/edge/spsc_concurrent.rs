@@ -6,6 +6,7 @@ use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{EdgePolicy, WatermarkState};
+use crate::prelude::BatchView;
 
 /// Thread-safe wrapper: makes ANY `Q: SpscQueue` cloneable + `Send + 'static`.
 pub struct ConcurrentQueue<Q> {
@@ -88,6 +89,32 @@ where
             Err(_) => Err(QueueError::Poisoned),
         }
     }
+
+    fn try_pop_batch(
+        &mut self,
+        policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        match self.inner.lock() {
+            Ok(mut q) => {
+                let batch_view = q.try_pop_batch(policy)?;
+
+                // Materialize into owned messages while the mutex is held,
+                // so no borrowed references escape the lock guard.
+                let mut owned: alloc::vec::Vec<Message<P>> =
+                    alloc::vec::Vec::with_capacity(batch_view.len());
+
+                for item in batch_view.iter() {
+                    owned.push(item.clone());
+                }
+
+                Ok(BatchView::from_owned(owned))
+            }
+            Err(_) => Err(QueueError::Poisoned),
+        }
+    }
 }
 
 impl<Q> Clone for ConcurrentQueue<Q> {
@@ -151,6 +178,16 @@ where
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         Err(QueueError::Unsupported)
     }
+
+    fn try_pop_batch(
+        &mut self,
+        _policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        Err(QueueError::Unsupported)
+    }
 }
 
 /// Consumer endpoint: pop + occupancy only.
@@ -204,5 +241,14 @@ where
     #[inline]
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         self.q.try_peek()
+    }
+    fn try_pop_batch(
+        &mut self,
+        policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        self.q.try_pop_batch(policy)
     }
 }

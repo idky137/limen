@@ -8,6 +8,7 @@ use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
 use crate::policy::EdgePolicy;
+use crate::prelude::BatchView;
 use crate::types::QoSClass;
 
 /// Two-lane priority queue.
@@ -78,6 +79,20 @@ where
         match self.hi.try_peek() {
             Ok(pr) => Ok(pr),
             Err(QueueError::Empty) => self.lo.try_peek(),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn try_pop_batch(
+        &mut self,
+        policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        match self.hi.try_pop_batch(policy) {
+            Ok(batch) => Ok(batch),
+            Err(QueueError::Empty) => self.lo.try_pop_batch(policy),
             Err(e) => Err(e),
         }
     }

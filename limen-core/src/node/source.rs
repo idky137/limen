@@ -24,8 +24,8 @@ use crate::errors::QueueError;
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
 use crate::node::{Node, NodeCapabilities, NodeKind, StepContext, StepResult};
-use crate::policy::{EdgePolicy, NodePolicy};
-use crate::prelude::{EdgeDescriptor, PlatformClock, Telemetry};
+use crate::policy::{BatchingPolicy, EdgePolicy, NodePolicy};
+use crate::prelude::{BatchView, EdgeDescriptor, PlatformClock, Telemetry};
 use crate::types::{EdgeIndex, NodeIndex, PortId};
 
 use core::marker::PhantomData;
@@ -307,6 +307,17 @@ where
     fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         self.src.ingress_occupancy(policy)
     }
+
+    #[inline]
+    fn try_pop_batch(
+        &mut self,
+        _policy: &BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        Err(QueueError::Empty)
+    }
 }
 
 /// A tiny link wrapper for the synthetic ingress edge.
@@ -394,6 +405,16 @@ where
     fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
         // Delegate to the borrowing edge (reads Source::ingress_occupancy).
         self.edge.occupancy(policy)
+    }
+    #[inline]
+    fn try_pop_batch(
+        &mut self,
+        _policy: &BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        Err(QueueError::Empty)
     }
 }
 
@@ -505,6 +526,17 @@ pub mod probe {
         #[inline]
         fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
             self.probe.occupancy(policy)
+        }
+
+        #[inline]
+        fn try_pop_batch(
+            &mut self,
+            _policy: &BatchingPolicy,
+        ) -> Result<BatchView<'_, Self::Item>, QueueError>
+        where
+            Self::Item: Payload,
+        {
+            Err(QueueError::Empty)
         }
     }
 
@@ -642,6 +674,16 @@ pub mod probe {
         fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
             // Delegate to the probe (reads atomics, computes watermark via policy).
             self.edge.occupancy(policy)
+        }
+        #[inline]
+        fn try_pop_batch(
+            &mut self,
+            _policy: &BatchingPolicy,
+        ) -> Result<BatchView<'_, Self::Item>, QueueError>
+        where
+            Self::Item: Payload,
+        {
+            Err(QueueError::Empty)
         }
     }
 }

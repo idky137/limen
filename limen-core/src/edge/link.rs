@@ -7,6 +7,7 @@ use crate::{
     errors::QueueError,
     message::{payload::Payload, Message},
     policy::EdgePolicy,
+    prelude::BatchView,
     types::{EdgeIndex, PortId},
 };
 
@@ -154,6 +155,17 @@ where
     #[inline]
     fn try_peek(&self) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
         self.queue.try_peek()
+    }
+
+    #[inline]
+    fn try_pop_batch(
+        &mut self,
+        policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        self.queue.try_pop_batch(policy)
     }
 }
 
@@ -354,6 +366,27 @@ where
                 },
                 Err(e) => Err(e),
             },
+            Err(_) => Err(crate::errors::QueueError::Poisoned),
+        }
+    }
+
+    #[inline]
+    fn try_pop_batch(
+        &mut self,
+        policy: &crate::policy::BatchingPolicy,
+    ) -> Result<BatchView<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        match self.buf.lock() {
+            Ok(mut q) => {
+                let batch = q.try_pop_batch(policy)?;
+
+                // We must not return a borrow tied to the mutex guard, so convert to owned.
+                // This preserves semantics for disjoint windows (moved items) and sliding
+                // windows (moved + cloned peek items) as established in the inner queues.
+                Ok(batch.into_owned())
+            }
             Err(_) => Err(crate::errors::QueueError::Poisoned),
         }
     }
