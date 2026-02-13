@@ -401,11 +401,27 @@ pub enum AdmissionPolicy {
 /// Decision returned by an admission controller.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Decision returned by EdgePolicy::decide (pure, side-effect free).
 pub enum AdmissionDecision {
-    /// Admit the item.
+    /// Accept the incoming item without evicting anything.
     Admit,
-    /// Reject the item per policy.
+
+    /// Refuse the incoming item.
     Reject,
+
+    /// Drop the incoming (newest) item; queue unchanged.
+    DropNewest,
+
+    /// Evict `n` oldest items, then admit (caller performs evictions).
+    /// `n` can be 1 for BetweenSoftAndHard with DropOldest.
+    Evict(usize),
+
+    /// Evict oldest items until the queue is below the hard watermark,
+    /// then admit if possible. Caller performs repeated evictions.
+    EvictUntilBelowHard,
+
+    /// Block the producer until space becomes available (edge decides how to block).
+    Block,
 }
 
 /// Per-edge policy bundle.
@@ -467,25 +483,72 @@ impl EdgePolicy {
     }
 
     /// Apply admission logic based on header hints (deadline/qos) and occupancy.
+    ///
+    /// # Behaviour
+    ///
+    /// - `BelowSoft`  => `Admit`.
+    /// - `BetweenSoftAndHard`:
+    ///     - `DeadlineAndQoSAware` => consult deadline/qos to decide (TODO: full impl).
+    ///     - `DropNewest` => `DropNewest`.
+    ///     - `DropOldest` => `Evict(1)`.
+    ///     - `Block` => `Block`.
+    /// - `AtOrAboveHard`:
+    ///     - If the *single* incoming item cannot fit under the hard cap (even when
+    ///       the queue is empty), the item is `Reject`ed immediately.
+    ///     - Otherwise:
+    ///         - `DropNewest` => `DropNewest`.
+    ///         - `DropOldest` => `EvictUntilBelowHard`.
+    ///         - `DeadlineAndQoSAware` => conservative default `Reject` (or consult
+    ///           deadline/qos if implemented).
+    ///         - `Block` => `Block`.
+    ///
+    /// # Warning
+    ///
+    /// QoS-aware behaviour is **not yet implemented**.  The `DeadlineAndQoSAware`
+    /// branch currently uses conservative defaults:
+    /// - between soft/hard it defaults to `Admit`, and
+    /// - at-or-above-hard it defaults to `Reject`.
+    ///
+    /// Implementors should update this method to use deadline and QoS hints
+    /// when the scheduler rules are available.
     pub fn decide(
         &self,
         items: usize,
         bytes: usize,
+        item_bytes: usize,
         _deadline: Option<DeadlineNs>,
         _qos: QoSClass,
     ) -> AdmissionDecision {
         match self.watermark(items, bytes) {
             WatermarkState::BelowSoft => AdmissionDecision::Admit,
-            WatermarkState::AtOrAboveHard => AdmissionDecision::Reject,
+
             WatermarkState::BetweenSoftAndHard => match self.admission {
                 AdmissionPolicy::DeadlineAndQoSAware => {
-                    // The full policy may weigh deadline & QoS; the core keeps it simple. TODO: CHECK!
+                    // TODO: implement full deadline/qos logic. For now, admit.
                     AdmissionDecision::Admit
                 }
-                AdmissionPolicy::DropNewest => AdmissionDecision::Reject,
-                AdmissionPolicy::DropOldest => AdmissionDecision::Admit, // queue impl will evict oldest TODO: CHECK!
-                AdmissionPolicy::Block => AdmissionDecision::Reject, // core cannot block TODO: FIX!
+                AdmissionPolicy::DropNewest => AdmissionDecision::DropNewest,
+                AdmissionPolicy::DropOldest => AdmissionDecision::Evict(1),
+                AdmissionPolicy::Block => AdmissionDecision::Block,
             },
+
+            WatermarkState::AtOrAboveHard => {
+                // If item alone cannot fit under hard caps, reject immediately.
+                if self.caps.at_or_above_hard(0, item_bytes) {
+                    return AdmissionDecision::Reject;
+                }
+
+                match self.admission {
+                    AdmissionPolicy::DeadlineAndQoSAware => {
+                        // Conservative default: reject at or above hard.
+                        // Or evaluate deadline/qos here and map to DropOldest/DropNewest.
+                        AdmissionDecision::Reject
+                    }
+                    AdmissionPolicy::DropNewest => AdmissionDecision::DropNewest,
+                    AdmissionPolicy::DropOldest => AdmissionDecision::EvictUntilBelowHard,
+                    AdmissionPolicy::Block => AdmissionDecision::Block,
+                }
+            }
         }
     }
 }

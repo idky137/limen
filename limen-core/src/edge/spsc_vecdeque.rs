@@ -8,7 +8,7 @@ use alloc::collections::VecDeque;
 use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState, WindowKind};
+use crate::policy::{AdmissionDecision, EdgePolicy, WindowKind};
 use crate::prelude::BatchView;
 use crate::types::Ticks;
 
@@ -43,36 +43,73 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
     type Item = Message<P>;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
-        let items = self.len();
-        let bytes = self.bytes;
+        // Ask the policy what to do (pure decision).
+        let decision = self.get_admission_decision(policy, &item);
 
-        // Hard cap + full => reject
-        if policy.caps.at_or_above_hard(items, bytes) && self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+        // Incoming item size.
+        let item_bytes = *item.header().payload_size_bytes();
 
-        // Between soft & hard: DropOldest eviction
-        match policy.watermark(items, bytes) {
-            WatermarkState::BetweenSoftAndHard
-                if matches!(policy.admission, AdmissionPolicy::DropOldest)
-                    && !self.buf.is_empty() =>
-            {
-                if let Some(ev) = self.buf.pop_front() {
-                    self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+        match decision {
+            AdmissionDecision::Admit => {
+                // Ensure physical capacity and logical hard-cap satisfied.
+                if self.is_full() || policy.caps.at_or_above_hard(self.len(), self.bytes) {
+                    return EnqueueResult::Rejected;
                 }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                self.buf.push_back(item);
+                EnqueueResult::Enqueued
             }
-            _ => {}
-        }
 
-        if self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+            AdmissionDecision::DropNewest => EnqueueResult::DroppedNewest,
 
-        self.bytes = self
-            .bytes
-            .saturating_add(*item.header().payload_size_bytes());
-        self.buf.push_back(item);
-        EnqueueResult::Enqueued
+            AdmissionDecision::Reject => EnqueueResult::Rejected,
+
+            AdmissionDecision::Block => {
+                // This P1 test ring cannot block; translate to Reject.
+                EnqueueResult::Rejected
+            }
+
+            AdmissionDecision::Evict(n) => {
+                for _ in 0..n {
+                    if let Some(ev) = self.buf.pop_front() {
+                        self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+                    } else {
+                        break;
+                    }
+                }
+
+                // After eviction, ensure we can accept the item.
+                if policy.caps.at_or_above_hard(self.len(), self.bytes) || self.is_full() {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                self.buf.push_back(item);
+                EnqueueResult::Enqueued
+            }
+
+            AdmissionDecision::EvictUntilBelowHard => {
+                while policy.caps.at_or_above_hard(self.len(), self.bytes) && !self.buf.is_empty() {
+                    if let Some(ev) = self.buf.pop_front() {
+                        self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+                    }
+                }
+
+                // If item alone cannot fit under hard caps, reject.
+                if policy.caps.at_or_above_hard(0, item_bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                if self.is_full() || policy.caps.at_or_above_hard(self.len(), self.bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                self.buf.push_back(item);
+                EnqueueResult::Enqueued
+            }
+        }
     }
 
     fn try_pop(&mut self) -> Result<Self::Item, QueueError> {
@@ -236,4 +273,13 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
         self.bytes = self.bytes.saturating_sub(popped_bytes);
         Ok(BatchView::from_owned(out))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    crate::run_edge_contract_tests!(heap_ring_contract, || {
+        HeapRing::<Message<u32>>::with_capacity(16)
+    });
 }

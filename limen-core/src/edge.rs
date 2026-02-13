@@ -1,6 +1,7 @@
 //! Limen single-producer single-consumer edge trait and related types.
 
 use crate::errors::QueueError;
+use crate::message::AdmissionInfo;
 use crate::message::{payload::Payload, Message};
 use crate::policy::{AdmissionDecision, BatchingPolicy, EdgePolicy, WatermarkState};
 use crate::prelude::BatchView;
@@ -135,23 +136,28 @@ pub trait Edge {
     ) -> Result<BatchView<'_, Self::Item>, QueueError>
     where
         Self::Item: Payload;
-}
 
-/// Convenience helper to enqueue a message using policy-derived admission logic.
-pub fn enqueue_with_admission<P: Payload, Q: Edge<Item = Message<P>>>(
-    queue: &mut Q,
-    policy: &EdgePolicy,
-    msg: Message<P>,
-) -> EnqueueResult {
-    let occ = queue.occupancy(policy);
-    match policy.decide(
-        occ.items,
-        occ.bytes,
-        *msg.header().deadline_ns(),
-        *msg.header().qos(),
-    ) {
-        AdmissionDecision::Admit => queue.try_push(msg, policy),
-        AdmissionDecision::Reject => EnqueueResult::Rejected,
+    /// Return an `AdmissionDecision` for the provided item or batch according
+    /// to `policy` and the current occupancy snapshot.
+    ///
+    /// This method is *pure*: it does not mutate the queue. Queue implementors
+    /// should call this, then implement the side-effecting behavior required
+    /// by the returned `AdmissionDecision` (evictions, push, reject, block).
+    ///
+    /// Works for both single `Message<P>` and `BatchView<'_, Message<P>>` because
+    /// both implement `AdmissionInfo`.
+    fn get_admission_decision<I>(&self, policy: &EdgePolicy, item: &I) -> AdmissionDecision
+    where
+        I: AdmissionInfo,
+    {
+        let occ = self.occupancy(policy);
+        policy.decide(
+            occ.items,
+            occ.bytes,
+            item.item_bytes(),
+            item.deadline(),
+            item.qos(),
+        )
     }
 }
 
@@ -290,5 +296,544 @@ impl<P: Payload> Edge for NoQueue<P> {
         Self::Item: Payload,
     {
         Err(QueueError::Empty)
+    }
+}
+
+#[cfg(any(test, feature = "bench"))]
+pub mod contract_tests {
+    //! `Edge` contract tests.
+    //!
+    //! This module defines the **contract test suite** that every `Edge`
+    //! implementation is expected to run. Passing these tests indicates the
+    //! queue behaves as required by the runtime (single-item semantics, batching
+    //! semantics, and admission-policy behavior under watermarks).
+    //!
+    //! What is validated
+    //! -----------------
+    //! The fixtures exercise:
+    //! - **Single-item operations**: `try_push`, `try_peek`, `try_pop`, `is_empty`,
+    //!   and `occupancy` sanity.
+    //! - **FIFO ordering**: items must be observed in the same order they were
+    //!   enqueued (unless admission causes eviction).
+    //! - **Batching semantics** via `try_pop_batch`:
+    //!   - fixed-N batches (`fixed_n`)
+    //!   - Δt-limited batches (`max_delta_t`, relative to the front item)
+    //!   - combined fixed-N + Δt (stop when either limit is reached)
+    //!   - sliding windows (present `size` items, but only pop/advance `stride`)
+    //!   - default policy behavior (`fixed_n = 1` when both caps are absent)
+    //! - **Admission policies** under pressure (BetweenSoftAndHard):
+    //!   - `DropNewest` → returns `DroppedNewest` and preserves existing items
+    //!   - `DropOldest` → evicts oldest (when possible) and enqueues newest
+    //!   - `Block` → treated as `Rejected` in core (no blocking in the queue contract)
+    //!   - `DeadlineAndQoSAware` → admitted between soft/hard per current core policy
+    //!
+    //! How to use
+    //! ----------
+    //! Consumers provide a constructor closure that produces a **fresh queue**
+    //! instance (empty) per test:
+    //!
+    //! ```ignore
+    //! use crate::edge::contract_tests;
+    //!
+    //! contract_tests::run_edge_contract_tests!(static_ring_contract, {
+    //!     StaticRing::<Message<u32>, 16>::new()
+    //! });
+    //! ```
+    //!
+    //! The `run_edge_contract_tests!` macro expands to a submodule containing one
+    //! `#[test]` per fixture, which makes failures easy to localize.
+    //!
+    //! Notes
+    //! -----
+    //! - Fixtures assume the queue starts empty. Always construct a new queue for
+    //!   each test/fixture (the macro does this by calling the constructor each time).
+    //! - These tests are intentionally implementation-agnostic: they work for
+    //!   heapless (borrowed batch views) and alloc-backed (owned batch views) queues.
+    //! - If an implementation wraps internal mutability (e.g., mutex), it must ensure
+    //!   returned views do not borrow from a temporary guard.
+
+    use super::*;
+    use crate::message::{Message, MessageHeader};
+    use crate::policy::{AdmissionPolicy, BatchingPolicy, EdgePolicy, OverBudgetAction, QueueCaps};
+    use crate::types::Ticks;
+
+    const TEST_EDGE_POLICY: EdgePolicy = EdgePolicy::new(
+        QueueCaps::new(8, 6, None, None),
+        AdmissionPolicy::DropNewest,
+        OverBudgetAction::Drop,
+    );
+
+    /// Build a simple test message with a creation tick and default header fields.
+    fn make_msg_u32(tick: u64) -> Message<u32> {
+        let mut h = MessageHeader::empty();
+        h.set_creation_tick(Ticks::new(tick));
+        Message::new(h, 0u32)
+    }
+
+    /// Define a set of contract tests for an `Edge` implementer.
+    ///
+    /// Usage:
+    ///
+    /// ```rust
+    /// contract_tests::define_edge_contract_tests!(static_ring_tests, || {
+    ///     crate::spsc_array::StaticRing::<crate::message::Message<u32>, 16>::new()
+    /// });
+    /// ```
+    ///
+    /// The macro expands to a submodule named by the first identifier and emits
+    /// several `#[test]` functions that run each fixture separately (so CI shows
+    /// which part failed).
+    #[macro_export]
+    macro_rules! run_edge_contract_tests {
+        // Accept: test module name, constructor expression (as a closure-like expr).
+        ($mod_name:ident, $make:expr) => {
+            // Emit a module to contain the tests (so names don't clash).
+            #[cfg(test)]
+            mod $mod_name {
+                use super::*;
+
+                use $crate::edge::contract_tests as fixtures;
+
+                // #[test]
+                // fn all_contracts() {
+                //     fixtures::run_all_tests(|| $make());
+                // }
+
+                #[test]
+                fn basic_push_pop() {
+                    fixtures::run_basic_push_pop(|| $make());
+                }
+
+                #[test]
+                fn fifo_order() {
+                    fixtures::run_fifo_order(|| $make());
+                }
+
+                #[test]
+                fn occupancy_and_empty() {
+                    fixtures::run_occupancy_and_empty(|| $make());
+                }
+
+                #[test]
+                fn batch_fixed_n() {
+                    fixtures::run_batch_fixed_n(|| $make());
+                }
+
+                #[test]
+                fn batch_delta_t() {
+                    fixtures::run_batch_delta_t(|| $make());
+                }
+
+                #[test]
+                fn batch_fixed_and_delta() {
+                    fixtures::run_batch_fixed_and_delta(|| $make());
+                }
+
+                #[test]
+                fn batch_sliding() {
+                    fixtures::run_batch_sliding(|| $make());
+                }
+
+                #[test]
+                fn batch_default_one() {
+                    fixtures::run_batch_default_one(|| $make());
+                }
+
+                #[test]
+                fn admission_policies() {
+                    fixtures::run_admission_policies(|| $make());
+                }
+            }
+        };
+    }
+
+    /// Convenience: run all contract tests for a queue produced by `make`.
+    ///
+    /// `make` must produce a fresh queue instance each time it is called.
+    pub fn run_all_tests<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        run_basic_push_pop(&mut make);
+        run_fifo_order(&mut make);
+        run_occupancy_and_empty(&mut make);
+        run_batch_fixed_n(&mut make);
+        run_batch_delta_t(&mut make);
+        run_batch_fixed_and_delta(&mut make);
+        run_batch_sliding(&mut make);
+        run_batch_default_one(&mut make);
+        run_admission_policies(&mut make)
+    }
+
+    /// Basic push / peek / pop / is_empty invariants.
+    pub fn run_basic_push_pop<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        // empty behaviour
+        assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+        assert!(matches!(q.try_peek(), Err(QueueError::Empty)));
+        assert!(q.is_empty());
+
+        // push
+        let m = make_msg_u32(1);
+        assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+
+        // peek sees same front
+        let peek = q.try_peek().expect("peek after push");
+        assert_eq!(
+            *peek.as_ref().header().creation_tick(),
+            *m.header().creation_tick()
+        );
+
+        // not empty
+        assert!(!q.is_empty());
+
+        // pop returns same
+        let got = q.try_pop().expect("pop after push");
+        assert_eq!(*got.header().creation_tick(), *m.header().creation_tick());
+
+        // back to empty
+        assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+        assert!(q.is_empty());
+    }
+
+    /// FIFO ordering with multiple items.
+    pub fn run_fifo_order<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        for t in 1u64..6u64 {
+            let m = make_msg_u32(t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        // pop in order
+        for expected in 1u64..6u64 {
+            let m = q.try_pop().expect("pop");
+            assert_eq!((*m.header().creation_tick()).as_u64(), &expected);
+        }
+        assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+    }
+
+    /// Occupancy snapshot sanity and is_empty.
+    pub fn run_occupancy_and_empty<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        let occ0 = q.occupancy(&policy);
+        assert_eq!(*occ0.items(), 0usize);
+        // bytes may be zero, and watermark is valid enum — don't assert exact watermark.
+
+        let m = make_msg_u32(1);
+        assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+
+        let occ1 = q.occupancy(&policy);
+        assert_eq!(*occ1.items(), 1usize);
+
+        // drain
+        let _ = q.try_pop().expect("pop");
+        let occ2 = q.occupancy(&policy);
+        assert_eq!(*occ2.items(), 0usize);
+    }
+
+    /// Disjoint windows: fixed-N semantics (pop exactly N when available).
+    pub fn run_batch_fixed_n<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        // push 5 items: 1..5
+        for t in 1u64..=5u64 {
+            let m = make_msg_u32(t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        let batch_policy = BatchingPolicy::fixed(3);
+        let batch = q.try_pop_batch(&batch_policy).expect("batch");
+        let batch_ref = batch.as_batch();
+        assert_eq!(batch_ref.len(), 3);
+        let mut iter = batch_ref.iter();
+        let a = iter.next().expect("batch[0]");
+        let b = iter.next().expect("batch[1]");
+        let c = iter.next().expect("batch[2]");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &1u64);
+        assert_eq!((*b.header().creation_tick()).as_u64(), &2u64);
+        assert_eq!((*c.header().creation_tick()).as_u64(), &3u64);
+        assert!(iter.next().is_none());
+
+        // remaining 2 should still be present
+        let a = q.try_pop().expect("rem1");
+        let b = q.try_pop().expect("rem2");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &4u64);
+        assert_eq!((*b.header().creation_tick()).as_u64(), &5u64);
+        assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+    }
+
+    /// Disjoint windows: delta-t semantics.
+    pub fn run_batch_delta_t<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        // ticks 10,11,12,30
+        for t in [10u64, 11u64, 12u64, 30u64].iter() {
+            let m = make_msg_u32(*t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        let batch_policy = BatchingPolicy::delta_t(Ticks::new(2u64));
+        let batch = q.try_pop_batch(&batch_policy).expect("batch");
+        let batch_ref = batch.as_batch();
+        assert_eq!(batch_ref.len(), 3);
+        let mut iter = batch_ref.iter();
+        let a = iter.next().expect("batch[0]");
+        let b = iter.next().expect("batch[1]");
+        let c = iter.next().expect("batch[2]");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &10u64);
+        assert_eq!((*b.header().creation_tick()).as_u64(), &11u64);
+        assert_eq!((*c.header().creation_tick()).as_u64(), &12u64);
+        assert!(iter.next().is_none());
+
+        // remaining is 30
+        let last = q.try_pop().expect("remaining");
+        assert_eq!((*last.header().creation_tick()).as_u64(), &30u64);
+    }
+
+    /// Combined fixed-N and delta-t.
+    pub fn run_batch_fixed_and_delta<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        // ticks: 100,101,102,110
+        for t in [100u64, 101u64, 102u64, 110u64].iter() {
+            let m = make_msg_u32(*t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        // fixed 2, delta cap 3: should return only first 2 despite delta permitting more
+        let batch_policy = BatchingPolicy::fixed_and_delta_t(2, Ticks::new(5u64));
+        let batch = q.try_pop_batch(&batch_policy).expect("batch");
+        let batch_ref = batch.as_batch();
+        assert_eq!(batch_ref.len(), 2);
+        let mut iter = batch_ref.iter();
+        let a = iter.next().expect("batch[0]");
+        let b = iter.next().expect("batch[1]");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &100u64);
+        assert_eq!((*b.header().creation_tick()).as_u64(), &101u64);
+        assert!(iter.next().is_none());
+
+        // remaining are 102 and 110
+        let a = q.try_pop().expect("a");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &102u64);
+        let b = q.try_pop().expect("b");
+        assert_eq!((*b.header().creation_tick()).as_u64(), &110u64);
+    }
+
+    /// Sliding windows semantics: present `size` but pop `stride`.
+    pub fn run_batch_sliding<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        // push ticks 1..6
+        for t in 1u64..=6u64 {
+            let m = make_msg_u32(t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        // sliding window: size=4 stride=2  => should return items [1,2,3,4] but only pop 2 (1,2).
+        let sw = crate::policy::WindowKind::Sliding(crate::policy::SlidingWindow::new(4, 2));
+        let batch_policy = crate::policy::BatchingPolicy::with_window(Some(4), None, sw);
+        let batch = q.try_pop_batch(&batch_policy).expect("batch");
+        let batch_ref = batch.as_batch();
+        assert_eq!(batch_ref.len(), 4);
+        let mut iter = batch_ref.iter();
+        let a = iter.next().expect("batch[0]");
+        let b = iter.next().expect("batch[1]");
+        let c = iter.next().expect("batch[2]");
+        let d = iter.next().expect("batch[3]");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &1u64);
+        assert_eq!((*b.header().creation_tick()).as_u64(), &2u64);
+        assert_eq!((*c.header().creation_tick()).as_u64(), &3u64);
+        assert_eq!((*d.header().creation_tick()).as_u64(), &4u64);
+        assert!(iter.next().is_none());
+
+        // after popping stride=2 elements, queue should still contain items starting from 3:
+        // remaining items should be 3,4,5,6 (4 items) but because we popped 2, len should be 4
+        // verify next pop returns 3
+        let next = q.try_pop().expect("next after sliding");
+        assert_eq!((*next.header().creation_tick()).as_u64(), &3u64);
+    }
+
+    /// Default behaviour: when neither fixed_n nor delta_t set, we treat as fixed_n=1.
+    pub fn run_batch_default_one<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        for t in [1u64, 2u64, 3u64].iter() {
+            let m = make_msg_u32(*t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        let batch_policy = BatchingPolicy::default();
+        let batch = q.try_pop_batch(&batch_policy).expect("batch");
+        let batch_ref = batch.as_batch();
+        assert_eq!(batch_ref.len(), 1);
+        assert_eq!(
+            (*batch_ref.iter().next().unwrap().header().creation_tick()).as_u64(),
+            &1u64
+        );
+
+        // remaining pops yield 2 and 3
+        let a = q.try_pop().expect("a");
+        let b = q.try_pop().expect("b");
+        assert_eq!((*a.header().creation_tick()).as_u64(), &2u64);
+        assert_eq!((*b.header().creation_tick()).as_u64(), &3u64);
+        assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+    }
+
+    /// Run admission policy tests for DropNewest / DropOldest / Block / DeadlineAndQoSAware.
+    ///
+    /// Uses caps: max_items=3, soft_items=1 so pushing 2nd item puts queue BetweenSoftAndHard.
+    pub fn run_admission_policies<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let caps = QueueCaps::new(3, 1, None, None);
+
+        // --- DropNewest: second push should be dropped (queue retains first item).
+        {
+            let mut q = make();
+            let policy = EdgePolicy::new(caps, AdmissionPolicy::DropNewest, OverBudgetAction::Drop);
+
+            // first item OK
+            let a = make_msg_u32(1);
+            assert_eq!(q.try_push(a, &policy), EnqueueResult::Enqueued);
+
+            // second push enters BetweenSoftAndHard -> DropNewest expected
+            let b = make_msg_u32(2);
+            let res = q.try_push(b, &policy);
+            assert_eq!(res, EnqueueResult::DroppedNewest);
+
+            // queue should still contain only `a`
+            let peek = q.try_peek().expect("peek after drop-newest");
+            assert_eq!(
+                *peek.as_ref().header().creation_tick(),
+                *a.header().creation_tick()
+            );
+            // drain
+            let popped = q.try_pop().expect("pop a");
+            assert_eq!(
+                *popped.header().creation_tick(),
+                *a.header().creation_tick()
+            );
+            assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+        }
+
+        // --- DropOldest: second push should evict oldest and succeed.
+        {
+            let mut q = make();
+            let policy = EdgePolicy::new(caps, AdmissionPolicy::DropOldest, OverBudgetAction::Drop);
+
+            let a = make_msg_u32(1);
+            assert_eq!(q.try_push(a, &policy), EnqueueResult::Enqueued);
+
+            let b = make_msg_u32(2);
+            let res = q.try_push(b, &policy);
+            assert_eq!(res, EnqueueResult::Enqueued);
+
+            // The queue should now contain only `b` (oldest `a` evicted).
+            let peek = q.try_peek().expect("peek after drop-oldest");
+            assert_eq!(
+                *peek.as_ref().header().creation_tick(),
+                *b.header().creation_tick()
+            );
+
+            // drain and verify
+            let popped = q.try_pop().expect("pop b");
+            assert_eq!(
+                *popped.header().creation_tick(),
+                *b.header().creation_tick()
+            );
+            assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+        }
+
+        // --- Block: core cannot block so we expect Rejected when BetweenSoftAndHard
+        {
+            let mut q = make();
+            let policy = EdgePolicy::new(caps, AdmissionPolicy::Block, OverBudgetAction::Drop);
+
+            let a = make_msg_u32(1);
+            assert_eq!(q.try_push(a, &policy), EnqueueResult::Enqueued);
+
+            let b = make_msg_u32(2);
+            let res = q.try_push(b, &policy);
+            assert_eq!(res, EnqueueResult::Rejected);
+
+            // queue should still contain only `a`
+            let popped = q.try_pop().expect("pop after block");
+            assert_eq!(
+                *popped.header().creation_tick(),
+                *a.header().creation_tick()
+            );
+            assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+        }
+
+        // --- DeadlineAndQoSAware: in core policy.decide this resolves to Admit between soft/hard.
+        {
+            let mut q = make();
+            let policy = EdgePolicy::new(
+                caps,
+                AdmissionPolicy::DeadlineAndQoSAware,
+                OverBudgetAction::Drop,
+            );
+
+            let a = make_msg_u32(1);
+            assert_eq!(q.try_push(a, &policy), EnqueueResult::Enqueued);
+
+            let b = make_msg_u32(2);
+            let res = q.try_push(b, &policy);
+            // core's EdgePolicy::decide returns Admit for DeadlineAndQoSAware between soft/hard
+            assert_eq!(res, EnqueueResult::Enqueued);
+
+            // both should be present in FIFO order.
+            let x = q.try_pop().expect("pop a");
+            let y = q.try_pop().expect("pop b");
+            assert_eq!(*x.header().creation_tick(), *a.header().creation_tick());
+            assert_eq!(*y.header().creation_tick(), *b.header().creation_tick());
+            assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
+        }
     }
 }

@@ -252,3 +252,75 @@ where
         self.q.try_pop_batch(policy)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::edge::bench::TestSpscRingBuf;
+
+    crate::run_edge_contract_tests!(concurrent_queue_contract, || {
+        let inner = TestSpscRingBuf::<Message<u32>, 16>::new();
+        ConcurrentQueue::new(inner)
+    });
+
+    mod endpoint_tests {
+        use super::*;
+
+        use crate::errors::QueueError;
+        use crate::message::{Message, MessageHeader};
+        use crate::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps};
+        use crate::types::Ticks;
+
+        const POLICY: EdgePolicy = EdgePolicy::new(
+            QueueCaps::new(8, 6, None, None),
+            AdmissionPolicy::DropNewest,
+            OverBudgetAction::Drop,
+        );
+
+        fn msg(tick: u64) -> Message<u32> {
+            let mut header = MessageHeader::empty();
+            header.set_creation_tick(Ticks::new(tick));
+            Message::new(header, 0u32)
+        }
+
+        #[test]
+        fn producer_endpoint_is_write_only() {
+            let inner = ConcurrentQueue::new(TestSpscRingBuf::<Message<u32>, 16>::new());
+            let mut producer = ProducerEndpoint::<u32, _>::new(inner);
+
+            assert_eq!(
+                producer.try_push(msg(1), &POLICY),
+                crate::edge::EnqueueResult::Enqueued
+            );
+            assert!(matches!(producer.try_pop(), Err(QueueError::Empty)));
+            assert!(matches!(producer.try_peek(), Err(QueueError::Unsupported)));
+            assert!(matches!(
+                producer.try_pop_batch(&crate::policy::BatchingPolicy::fixed(2)),
+                Err(QueueError::Unsupported)
+            ));
+        }
+
+        #[test]
+        fn consumer_endpoint_is_read_only() {
+            let mut q = ConcurrentQueue::new(TestSpscRingBuf::<Message<u32>, 16>::new());
+            assert_eq!(
+                q.try_push(msg(1), &POLICY),
+                crate::edge::EnqueueResult::Enqueued
+            );
+
+            let mut consumer = ConsumerEndpoint::<u32, _>::new(q);
+
+            assert_eq!(
+                consumer.try_push(msg(2), &POLICY),
+                crate::edge::EnqueueResult::Rejected
+            );
+
+            let peek = consumer.try_peek().expect("peek");
+            assert_eq!((*peek.as_ref().header().creation_tick()).as_u64(), &1u64);
+
+            let popped = consumer.try_pop().expect("pop");
+            assert_eq!((*popped.header().creation_tick()).as_u64(), &1u64);
+        }
+    }
+}

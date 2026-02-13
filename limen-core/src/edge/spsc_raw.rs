@@ -144,32 +144,88 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
     type Item = Message<P>;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
-        let items = self.len();
-        let bytes = self.bytes_in_queue.load(Ordering::Acquire);
+        // Ask the policy for a pure admission decision.
+        let decision = self.get_admission_decision(policy, &item);
 
-        if policy.caps.at_or_above_hard(items, bytes) && self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+        // Item bytes (header.payload_size_bytes is used elsewhere in this module).
+        let item_bytes = item.header.payload_size_bytes;
 
-        match policy.watermark(items, bytes) {
-            WatermarkState::BetweenSoftAndHard
-                if matches!(policy.admission, AdmissionPolicy::DropOldest) && self.len() > 0 =>
-            {
-                let ev = self.pop_raw();
-                self.bytes_in_queue
-                    .fetch_sub(ev.header.payload_size_bytes, Ordering::AcqRel);
+        match decision {
+            AdmissionDecision::Admit => {
+                // Ensure physical and logical capacity.
+                let items = self.len();
+                let bytes = self.bytes_in_queue.load(Ordering::Acquire);
+                if self.is_full() || policy.caps.at_or_above_hard(items, bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                // Publish bytes then write the item.
+                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
+                self.push_raw(item);
+                EnqueueResult::Enqueued
             }
-            _ => {}
-        }
 
-        if self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+            AdmissionDecision::DropNewest => EnqueueResult::DroppedNewest,
 
-        self.bytes_in_queue
-            .fetch_add(item.header.payload_size_bytes, Ordering::AcqRel);
-        self.push_raw(item);
-        EnqueueResult::Enqueued
+            AdmissionDecision::Reject => EnqueueResult::Rejected,
+
+            AdmissionDecision::Block => {
+                // Non-blocking test environment: translate to Rejected.
+                EnqueueResult::Rejected
+            }
+
+            AdmissionDecision::Evict(n) => {
+                // Evict up to n oldest items (or fewer if empty).
+                for _ in 0..n {
+                    if self.len() == 0 {
+                        break;
+                    }
+                    let ev = self.pop_raw();
+                    self.bytes_in_queue
+                        .fetch_sub(ev.header.payload_size_bytes, Ordering::AcqRel);
+                }
+
+                // Check if we can now accept the item.
+                let items = self.len();
+                let bytes = self.bytes_in_queue.load(Ordering::Acquire);
+                if self.is_full() || policy.caps.at_or_above_hard(items, bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
+                self.push_raw(item);
+                EnqueueResult::Enqueued
+            }
+
+            AdmissionDecision::EvictUntilBelowHard => {
+                // Evict until below hard cap or queue empty.
+                while policy
+                    .caps
+                    .at_or_above_hard(self.len(), self.bytes_in_queue.load(Ordering::Acquire))
+                    && self.len() > 0
+                {
+                    let ev = self.pop_raw();
+                    self.bytes_in_queue
+                        .fetch_sub(ev.header.payload_size_bytes, Ordering::AcqRel);
+                }
+
+                // If single item cannot fit in an empty queue, reject.
+                if policy.caps.at_or_above_hard(0, item_bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                // Ensure physical capacity and logical caps satisfied.
+                let items = self.len();
+                let bytes = self.bytes_in_queue.load(Ordering::Acquire);
+                if self.is_full() || policy.caps.at_or_above_hard(items, bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
+                self.push_raw(item);
+                EnqueueResult::Enqueued
+            }
+        }
     }
 
     fn try_pop(&mut self) -> Result<Self::Item, QueueError> {
@@ -329,4 +385,30 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
 
         Ok(BatchView::from_owned(out))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::message::Message;
+
+    /// Build a fresh SpscAtomicRing with a power-of-two backing capacity.
+    ///
+    /// Note: this ring uses the classic "one slot empty" scheme, so usable
+    /// capacity is `cap - 1`. Pick a value large enough for the contract tests.
+    fn make_ring() -> SpscAtomicRing<Message<u32>> {
+        // Needs to be power-of-two; usable capacity is 31 here.
+        const CAPACITY: usize = 32;
+
+        // SAFETY:
+        // - We only use the queue under single-threaded test execution (SPSC discipline).
+        // - Capacity is power-of-two.
+        // - Contract tests do not attempt to read from empty or write to full without
+        //   going through the queue API.
+        unsafe { SpscAtomicRing::<Message<u32>>::with_capacity(CAPACITY) }
+    }
+
+    // Run the full Edge contract suite against SpscAtomicRing<Message<u32>>.
+    crate::run_edge_contract_tests!(spsc_atomic_ring_contract, || make_ring());
 }

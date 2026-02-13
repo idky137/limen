@@ -2,6 +2,8 @@
 
 // ***** Tracing *****
 
+use core::cmp::Ordering;
+
 /// A 64-bit trace identifier used to correlate messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TraceId(u64);
@@ -97,15 +99,40 @@ impl DeadlineNs {
 // ***** Policy *****
 
 /// Quality-of-Service class label attached to messages and used by admission.
+#[repr(u8)]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QoSClass {
     /// Latency-critical traffic; favored by EDF schedulers.
-    LatencyCritical,
+    LatencyCritical = 3,
+
     /// Default best-effort traffic.
-    BestEffort,
+    BestEffort = 2,
+
     /// Background/low-priority traffic.
-    Background,
+    Background = 1,
+}
+
+impl QoSClass {
+    /// Return the numeric priority associated with this QoS class.
+    #[inline]
+    fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl PartialOrd for QoSClass {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for QoSClass {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_u8().cmp(&other.as_u8())
+    }
 }
 
 // ***** Routing *****

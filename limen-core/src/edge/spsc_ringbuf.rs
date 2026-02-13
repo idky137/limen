@@ -10,7 +10,7 @@ use ringbuf::{HeapCons, HeapProd, HeapRb};
 use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState, WindowKind};
+use crate::policy::{AdmissionDecision, EdgePolicy, WindowKind};
 use crate::prelude::BatchView;
 use crate::types::Ticks;
 
@@ -60,35 +60,102 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
     type Item = Message<P>;
 
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
-        let items = self.len_internal();
-        let bytes = self.bytes;
+        // Ask the policy for a pure admission decision.
+        let decision = self.get_admission_decision(policy, &item);
 
-        if policy.caps.at_or_above_hard(items, bytes) && self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+        let item_bytes = *item.header().payload_size_bytes();
 
-        match policy.watermark(items, bytes) {
-            WatermarkState::BetweenSoftAndHard
-                if matches!(policy.admission, AdmissionPolicy::DropOldest)
-                    && self.len_internal() > 0 =>
-            {
-                if let Some(ev) = self.cons.try_pop() {
-                    self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+        match decision {
+            AdmissionDecision::Admit => {
+                // Ensure we have physical and logical capacity.
+                if self.is_full()
+                    || policy
+                        .caps
+                        .at_or_above_hard(self.len_internal(), self.bytes)
+                {
+                    return EnqueueResult::Rejected;
                 }
+
+                // Try to push into ringbuf producer.
+                if let Err(_returned) = self.prod.try_push(item) {
+                    // Producer reports full or otherwise failed to push.
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                EnqueueResult::Enqueued
             }
-            _ => {}
-        }
 
-        if self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+            AdmissionDecision::DropNewest => EnqueueResult::DroppedNewest,
 
-        let payload_bytes = *item.header().payload_size_bytes();
-        if let Err(_item_back) = self.prod.try_push(item) {
-            return EnqueueResult::Rejected;
+            AdmissionDecision::Reject => EnqueueResult::Rejected,
+
+            AdmissionDecision::Block => {
+                // This SPSC ring used in tests cannot block the caller.
+                EnqueueResult::Rejected
+            }
+
+            AdmissionDecision::Evict(n) => {
+                // Evict up to n oldest items from consumer.
+                for _ in 0..n {
+                    if let Some(ev) = self.cons.try_pop() {
+                        self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+                    } else {
+                        break;
+                    }
+                }
+
+                // After eviction ensure we can accept.
+                if policy
+                    .caps
+                    .at_or_above_hard(self.len_internal(), self.bytes)
+                    || self.is_full()
+                {
+                    return EnqueueResult::Rejected;
+                }
+
+                // Attempt to push.
+                if let Err(_returned) = self.prod.try_push(item) {
+                    return EnqueueResult::Rejected;
+                }
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                EnqueueResult::Enqueued
+            }
+
+            AdmissionDecision::EvictUntilBelowHard => {
+                // Evict until below hard cap or until empty.
+                while policy
+                    .caps
+                    .at_or_above_hard(self.len_internal(), self.bytes)
+                    && self.len_internal() > 0
+                {
+                    if let Some(ev) = self.cons.try_pop() {
+                        self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+                    } else {
+                        break;
+                    }
+                }
+
+                // If single item cannot fit into an empty queue, reject.
+                if policy.caps.at_or_above_hard(0, item_bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                if self.is_full()
+                    || policy
+                        .caps
+                        .at_or_above_hard(self.len_internal(), self.bytes)
+                {
+                    return EnqueueResult::Rejected;
+                }
+
+                if let Err(_returned) = self.prod.try_push(item) {
+                    return EnqueueResult::Rejected;
+                }
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                EnqueueResult::Enqueued
+            }
         }
-        self.bytes = self.bytes.saturating_add(payload_bytes);
-        EnqueueResult::Enqueued
     }
 
     fn try_pop(&mut self) -> Result<Self::Item, QueueError> {
@@ -273,4 +340,14 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
 
         Ok(BatchView::from_owned(out))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Runs the full Edge contract suite against StaticRing<Message<u32>, 16>.
+    crate::run_edge_contract_tests!(spsc_ring_buf_contract, || {
+        SpscRingbuf::<Message<u32>>::with_capacity(16)
+    });
 }

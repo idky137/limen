@@ -1,8 +1,7 @@
 //! Convenience re-exports for implementers.
 
 pub use crate::edge::{
-    enqueue_with_admission, link::*, spsc_array::*, spsc_priority2, Edge, EdgeOccupancy,
-    EnqueueResult, NoQueue,
+    link::*, spsc_array::*, spsc_priority2, Edge, EdgeOccupancy, EnqueueResult, NoQueue,
 };
 pub use crate::errors::*;
 pub use crate::graph::{validate::*, *};

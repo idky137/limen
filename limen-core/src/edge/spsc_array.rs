@@ -10,7 +10,7 @@
 use crate::edge::{Edge, EdgeOccupancy, EnqueueResult, PeekResponse};
 use crate::errors::QueueError;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{AdmissionPolicy, EdgePolicy, WatermarkState};
+use crate::policy::{AdmissionDecision, EdgePolicy};
 use crate::prelude::BatchView;
 
 use core::mem;
@@ -118,40 +118,79 @@ impl<T: Default + Clone, const N: usize> StaticRing<T, N> {
 impl<P: Payload + Clone + Default, const N: usize> Edge for StaticRing<Message<P>, N> {
     type Item = Message<P>;
 
-    /// Try to push a single message into the ring using the given admission policy.
-    ///
-    /// Respects watermark-based `DropOldest` admission and the hard-cap rejection.
     fn try_push(&mut self, item: Self::Item, policy: &EdgePolicy) -> EnqueueResult {
-        let items = self.len;
-        let bytes = self.bytes;
+        // Ask policy for a pure admission decision. Message<P> implements AdmissionInfo.
+        let decision = self.get_admission_decision(policy, &item);
 
-        // If hard cap is reached and ring is full, reject.
-        if policy.caps.at_or_above_hard(items, bytes) && self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+        // Incoming item size in bytes (header exposes a &usize for payload_size_bytes).
+        let item_bytes = *item.header().payload_size_bytes();
 
-        // If between soft & hard and admission policy is DropOldest, evict one item.
-        match policy.watermark(items, bytes) {
-            WatermarkState::BetweenSoftAndHard
-                if matches!(policy.admission, AdmissionPolicy::DropOldest) && self.len > 0 =>
-            {
-                let evicted = self.pop_raw();
-                self.bytes = self
-                    .bytes
-                    .saturating_sub(*evicted.header().payload_size_bytes());
+        match decision {
+            AdmissionDecision::Admit => {
+                // Ensure the ring is not physically full and logical hard caps aren't violated.
+                if self.is_full() || policy.caps.at_or_above_hard(self.len, self.bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                self.push_raw(item);
+                EnqueueResult::Enqueued
             }
-            _ => {}
-        }
 
-        if self.is_full() {
-            return EnqueueResult::Rejected;
-        }
+            AdmissionDecision::DropNewest => {
+                // Do not mutate queue; indicate incoming item dropped.
+                EnqueueResult::DroppedNewest
+            }
 
-        self.bytes = self
-            .bytes
-            .saturating_add(*item.header().payload_size_bytes());
-        self.push_raw(item);
-        EnqueueResult::Enqueued
+            AdmissionDecision::Reject => EnqueueResult::Rejected,
+
+            AdmissionDecision::Block => {
+                // This StaticRing (test / P0) cannot block; translate to Rejected.
+                EnqueueResult::Rejected
+            }
+
+            AdmissionDecision::Evict(n) => {
+                // Evict up to n oldest items (or fewer if empty).
+                for _ in 0..n {
+                    if self.len == 0 {
+                        break;
+                    }
+                    let ev = self.pop_raw();
+                    self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+                }
+
+                // After evictions, ensure we can accept the item.
+                if policy.caps.at_or_above_hard(self.len, self.bytes) || self.is_full() {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                self.push_raw(item);
+                EnqueueResult::Enqueued
+            }
+
+            AdmissionDecision::EvictUntilBelowHard => {
+                // Evict until below hard cap or queue empties.
+                while policy.caps.at_or_above_hard(self.len, self.bytes) && self.len > 0 {
+                    let ev = self.pop_raw();
+                    self.bytes = self.bytes.saturating_sub(*ev.header().payload_size_bytes());
+                }
+
+                // If the single item cannot fit even in an empty queue, reject.
+                if policy.caps.at_or_above_hard(0, item_bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                // Check physical fullness or remaining hard-cap violation.
+                if self.is_full() || policy.caps.at_or_above_hard(self.len, self.bytes) {
+                    return EnqueueResult::Rejected;
+                }
+
+                self.bytes = self.bytes.saturating_add(item_bytes);
+                self.push_raw(item);
+                EnqueueResult::Enqueued
+            }
+        }
     }
 
     /// Try to pop a single message.
@@ -344,4 +383,14 @@ impl<T: Default + Clone, const N: usize> Default for StaticRing<T, N> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Runs the full Edge contract suite against StaticRing<Message<u32>, 16>.
+    crate::run_edge_contract_tests!(static_ring_contract, || {
+        StaticRing::<Message<u32>, 16>::new()
+    });
 }

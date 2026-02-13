@@ -391,3 +391,162 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::edge::bench::TestSpscRingBuf;
+    use crate::message::MessageHeader;
+    use crate::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps};
+    use crate::types::{EdgeIndex, NodeIndex, PortId, PortIndex, Ticks};
+
+    const POLICY: EdgePolicy = EdgePolicy::new(
+        QueueCaps::new(8, 6, None, None),
+        AdmissionPolicy::DropNewest,
+        OverBudgetAction::Drop,
+    );
+
+    fn make_link() -> EdgeLink<TestSpscRingBuf<Message<u32>, 16>, u32> {
+        let queue = TestSpscRingBuf::<Message<u32>, 16>::new();
+
+        let id = EdgeIndex::new(0);
+
+        let upstream_port = PortId::new(NodeIndex::new(0), PortIndex::new(0));
+        let downstream_port = PortId::new(NodeIndex::new(1), PortIndex::new(0));
+
+        EdgeLink::new(
+            queue,
+            id,
+            upstream_port,
+            downstream_port,
+            POLICY,
+            Some("edge:hi"),
+        )
+    }
+
+    crate::run_edge_contract_tests!(edge_link_contract, || make_link());
+
+    #[test]
+    fn edge_link_metadata_accessors_and_descriptor() {
+        let link = make_link();
+
+        assert_eq!(link.id(), &EdgeIndex::new(0));
+        assert_eq!(
+            link.upstream_port(),
+            &PortId::new(NodeIndex::new(0), PortIndex::new(0))
+        );
+        assert_eq!(
+            link.downstream_port(),
+            &PortId::new(NodeIndex::new(1), PortIndex::new(0))
+        );
+        assert_eq!(link.policy(), &POLICY);
+        assert_eq!(link.name(), Some("edge:hi"));
+
+        let d = link.descriptor();
+        assert_eq!(d.id(), &EdgeIndex::new(0));
+        assert_eq!(
+            d.upstream(),
+            &PortId::new(NodeIndex::new(0), PortIndex::new(0))
+        );
+        assert_eq!(
+            d.downstream(),
+            &PortId::new(NodeIndex::new(1), PortIndex::new(0))
+        );
+        assert_eq!(d.name(), Some("edge:hi"));
+    }
+
+    #[test]
+    fn edge_link_forwards_to_inner_queue_smoke() {
+        let mut link = make_link();
+
+        let mut header = MessageHeader::empty();
+        header.set_creation_tick(Ticks::new(123));
+        let msg = Message::new(header, 0u32);
+
+        assert_eq!(
+            link.try_push(msg, &POLICY),
+            crate::edge::EnqueueResult::Enqueued
+        );
+        let popped = link.try_pop().expect("pop");
+        assert_eq!((*popped.header().creation_tick()).as_u64(), &123u64);
+    }
+
+    #[cfg(all(test, feature = "std"))]
+    mod concurrent_tests {
+        use super::*;
+
+        use crate::edge::bench::TestSpscRingBuf;
+        use crate::message::MessageHeader;
+        use crate::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps};
+        use crate::types::{EdgeIndex, NodeIndex, PortId, PortIndex, Ticks};
+
+        const POLICY: EdgePolicy = EdgePolicy::new(
+            QueueCaps::new(8, 6, None, None),
+            AdmissionPolicy::DropNewest,
+            OverBudgetAction::Drop,
+        );
+
+        fn make_concurrent_link() -> ConcurrentEdgeLink<TestSpscRingBuf<Message<u32>, 16>, u32> {
+            let queue = TestSpscRingBuf::<Message<u32>, 16>::new();
+
+            let id = EdgeIndex::new(0);
+
+            let upstream = PortId::new(NodeIndex::new(0), PortIndex::new(0));
+            let downstream = PortId::new(NodeIndex::new(1), PortIndex::new(0));
+
+            ConcurrentEdgeLink::new(
+                queue,
+                id,
+                upstream,
+                downstream,
+                POLICY,
+                Some("edge:concurrent"),
+            )
+        }
+
+        crate::run_edge_contract_tests!(concurrent_edge_link_contract, || make_concurrent_link());
+
+        #[test]
+        fn concurrent_edge_link_metadata_and_descriptor() {
+            let link = make_concurrent_link();
+
+            assert_eq!(link.policy(), &POLICY);
+
+            let d = link.descriptor();
+            assert_eq!(d.id(), &EdgeIndex::new(0));
+            assert_eq!(
+                d.upstream(),
+                &PortId::new(NodeIndex::new(0), PortIndex::new(0))
+            );
+            assert_eq!(
+                d.downstream(),
+                &PortId::new(NodeIndex::new(1), PortIndex::new(0))
+            );
+            assert_eq!(d.name(), Some("edge:concurrent"));
+        }
+
+        #[test]
+        fn concurrent_edge_link_arc_shares_underlying_queue() {
+            let link = make_concurrent_link();
+            let arc_a = link.arc();
+            let arc_b = link.arc();
+
+            {
+                let mut q = arc_a.lock().expect("lock a");
+                let mut header = MessageHeader::empty();
+                header.set_creation_tick(Ticks::new(55));
+                let msg = Message::new(header, 0u32);
+
+                let res = q.try_push(msg, &POLICY);
+                assert_eq!(res, crate::edge::EnqueueResult::Enqueued);
+            }
+
+            {
+                let mut q = arc_b.lock().expect("lock b");
+                let popped = q.try_pop().expect("pop");
+                assert_eq!((*popped.header().creation_tick()).as_u64(), &55u64);
+            }
+        }
+    }
+}
