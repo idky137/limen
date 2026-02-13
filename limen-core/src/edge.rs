@@ -120,6 +120,18 @@ pub trait Edge {
     where
         Self::Item: Payload;
 
+    /// Peek at the item at logical position `index` from the front without removing it.
+    ///
+    /// - `index = 0` is equivalent to `try_peek`.
+    /// - Implementations may return `QueueError::Empty` if `index` is out of range.
+    /// - Should avoid blocking; concurrent backends may return an error conservatively.
+    ///
+    /// This is required to support strict `(fixed_n, max_delta_t)` readiness checks
+    /// without mutating the queue.
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload;
+
     /// Attempt to pop a batch of items according to the provided batching policy.
     ///
     /// The returned `BatchView<'_, Self::Item>` is allowed to borrow from `self`
@@ -281,6 +293,13 @@ impl<P: Payload> Edge for NoQueue<P> {
 
     #[inline]
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        Err(QueueError::Empty)
+    }
+
+    fn try_peek_at(&self, _index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError>
     where
         Self::Item: Payload,
     {
@@ -458,6 +477,11 @@ pub mod contract_tests {
                 fn batch_item_bytes_and_deadline_semantics() {
                     fixtures::batch_item_bytes_and_deadline_semantics(|| $make());
                 }
+
+                #[test]
+                fn try_peek_at() {
+                    fixtures::run_try_peek_at(|| $make());
+                }
             }
         };
     }
@@ -481,7 +505,8 @@ pub mod contract_tests {
         run_admission_policies(&mut make);
         batch_get_admission_drop_newest_between_soft_and_hard(&mut make);
         batch_get_admission_evict_until_below_hard(&mut make);
-        batch_item_bytes_and_deadline_semantics(&mut make)
+        batch_item_bytes_and_deadline_semantics(&mut make);
+        run_try_peek_at(&mut make)
     }
 
     /// Basic push / peek / pop / is_empty invariants.
@@ -1010,5 +1035,46 @@ pub mod contract_tests {
 
         // And confirm that deadline() indeed matches the last header we set (2000).
         assert_eq!(batch.deadline(), Some(DeadlineNs::new(2000)));
+    }
+
+    /// `try_peek_at` semantics:
+    /// - empty queue => `Err(QueueError::Empty)`
+    /// - valid indices [0..len) return borrowed/owned refs to the correct items without removing
+    /// - out-of-range index => `Err(QueueError::Empty)`
+    pub fn run_try_peek_at<Q, F>(mut make: F)
+    where
+        F: FnMut() -> Q,
+        Q: Edge<Item = Message<u32>>,
+    {
+        let mut q = make();
+        let policy = TEST_EDGE_POLICY;
+
+        // empty behaviour
+        assert!(matches!(q.try_peek_at(0), Err(QueueError::Empty)));
+
+        // push ticks 1..=4
+        for t in 1u64..=4u64 {
+            let m = make_msg_u32(t);
+            assert_eq!(q.try_push(m, &policy), EnqueueResult::Enqueued);
+        }
+
+        // in-range peeks
+        for (idx, expected) in (0usize..4usize).zip(1u64..=4u64) {
+            let peek = q.try_peek_at(idx).expect("peek_at in range");
+            assert_eq!(
+                (*peek.as_ref().header().creation_tick()).as_u64(),
+                &expected
+            );
+        }
+
+        // out-of-range peek
+        assert!(matches!(q.try_peek_at(4), Err(QueueError::Empty)));
+
+        // ensure peeks did not remove anything (FIFO still intact)
+        for expected in 1u64..=4u64 {
+            let m = q.try_pop().expect("pop after peek_at");
+            assert_eq!((*m.header().creation_tick()).as_u64(), &expected);
+        }
+        assert!(matches!(q.try_pop(), Err(QueueError::Empty)));
     }
 }

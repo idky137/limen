@@ -90,6 +90,32 @@ where
         }
     }
 
+    /// Peek at the item at logical position `index` from the front without removing it.
+    ///
+    /// This wrapper never returns a borrowed reference from the inner queue, because
+    /// any borrow would be tied to the mutex guard and would escape the lock scope.
+    /// Therefore:
+    ///
+    /// - If the inner queue can provide a borrowed reference, we clone the item while
+    ///   holding the mutex and return `PeekResponse::Owned`.
+    /// - If the inner queue already returns `Owned`, we forward it.
+    ///
+    /// On mutex poisoning, returns `QueueError::Poisoned`.
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
+        match self.inner.lock() {
+            Ok(q) => match q.try_peek_at(index) {
+                Ok(peek) => match peek {
+                    PeekResponse::Borrowed(b) => Ok(PeekResponse::Owned(b.clone())),
+                    #[cfg(feature = "alloc")]
+                    PeekResponse::Owned(o) => Ok(PeekResponse::Owned(o)),
+                },
+                Err(e) => Err(e),
+            },
+            Err(_) => Err(QueueError::Poisoned),
+        }
+    }
+
     fn try_pop_batch(
         &mut self,
         policy: &crate::policy::BatchingPolicy,
@@ -178,7 +204,10 @@ where
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         Err(QueueError::Unsupported)
     }
-
+    #[inline]
+    fn try_peek_at(&self, _index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
+        Err(QueueError::Unsupported)
+    }
     fn try_pop_batch(
         &mut self,
         _policy: &crate::policy::BatchingPolicy,
@@ -241,6 +270,10 @@ where
     #[inline]
     fn try_peek(&self) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
         self.q.try_peek()
+    }
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
+        self.q.try_peek_at(index)
     }
     fn try_pop_batch(
         &mut self,

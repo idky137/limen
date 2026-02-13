@@ -231,6 +231,16 @@ impl<P: Payload + Clone + Default, const N: usize> Edge for TestSpscRingBuf<Mess
         Ok(PeekResponse::Borrowed(&self.buf[self.head]))
     }
 
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
+        if index >= self.len {
+            return Err(QueueError::Empty);
+        }
+
+        let idx = (self.head + index) % N;
+        Ok(PeekResponse::Borrowed(&self.buf[idx]))
+    }
+
     /// Pop a batch of items according to `BatchingPolicy`.
     ///
     /// - Disjoint windows: pop up to `fixed_n` or `max_delta_t`.

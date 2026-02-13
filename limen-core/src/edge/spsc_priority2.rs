@@ -85,6 +85,18 @@ where
         }
     }
 
+    #[inline]
+    fn try_peek_at(
+        &self,
+        index: usize,
+    ) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+        match self.hi.try_peek_at(index) {
+            Ok(pr) => Ok(pr),
+            Err(QueueError::Empty) => self.lo.try_peek_at(index),
+            Err(e) => Err(e),
+        }
+    }
+
     fn try_pop_batch(
         &mut self,
         policy: &crate::policy::BatchingPolicy,

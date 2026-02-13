@@ -227,6 +227,29 @@ impl<P: Payload + Clone + Default, const N: usize> Edge for StaticRing<Message<P
         Ok(PeekResponse::Borrowed(&self.buf[self.head]))
     }
 
+    /// Peek at the item at logical position `index` from the front without removing it.
+    ///
+    /// - `index == 0` is equivalent to `try_peek()`.
+    /// - Returns `QueueError::Empty` if the queue is empty **or** if `index >= len`.
+    ///
+    /// This method is used by schedulers/contexts to check batch readiness for
+    /// policies like `(fixed_n, max_delta_t)` without mutating the queue.
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        if self.len == 0 {
+            return Err(QueueError::Empty);
+        }
+        if index >= self.len {
+            return Err(QueueError::Empty);
+        }
+
+        let pos = (self.head + index) % N;
+        Ok(PeekResponse::Borrowed(&self.buf[pos]))
+    }
+
     /// Pop a batch of items according to `BatchingPolicy`.
     ///
     /// - Disjoint windows: pop up to `fixed_n` or `max_delta_t`.

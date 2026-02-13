@@ -141,6 +141,24 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
         }
     }
 
+    /// Peek at the item at logical position `index` from the front without removing it.
+    ///
+    /// - `index == 0` is equivalent to `try_peek()`.
+    /// - Returns `QueueError::Empty` if the queue is empty **or** if `index >= len`.
+    ///
+    /// This is used by schedulers/contexts to check `(fixed_n, max_delta_t)` readiness
+    /// without mutating the queue.
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        match self.buf.get(index) {
+            Some(item) => Ok(PeekResponse::Borrowed(item)),
+            None => Err(QueueError::Empty),
+        }
+    }
+
     fn try_pop_batch(
         &mut self,
         policy: &crate::policy::BatchingPolicy,

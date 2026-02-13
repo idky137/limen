@@ -158,6 +158,14 @@ where
     }
 
     #[inline]
+    fn try_peek_at(
+        &self,
+        index: usize,
+    ) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+        self.queue.try_peek_at(index)
+    }
+
+    #[inline]
     fn try_pop_batch(
         &mut self,
         policy: &crate::policy::BatchingPolicy,
@@ -363,6 +371,26 @@ where
 
                     #[cfg(feature = "alloc")]
                     PeekResponse::Owned(o) => Ok(crate::edge::PeekResponse::Owned(o)),
+                },
+                Err(e) => Err(e),
+            },
+            Err(_) => Err(crate::errors::QueueError::Poisoned),
+        }
+    }
+
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError> {
+        match self.buf.lock() {
+            Ok(q) => match q.try_peek_at(index) {
+                Ok(peek) => match peek {
+                    // Must not return a borrow tied to the mutex guard.
+                    PeekResponse::Borrowed(b) => {
+                        let owned = b.clone();
+                        Ok(PeekResponse::Owned(owned))
+                    }
+
+                    #[cfg(feature = "alloc")]
+                    PeekResponse::Owned(o) => Ok(PeekResponse::Owned(o)),
                 },
                 Err(e) => Err(e),
             },

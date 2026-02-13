@@ -15,7 +15,7 @@ use crate::edge::{Edge, EdgeOccupancy};
 use crate::errors::{NodeError, QueueError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{EdgePolicy, NodePolicy};
+use crate::policy::{BatchingPolicy, EdgePolicy, NodePolicy, SlidingWindow, WindowKind};
 use crate::prelude::{PlatformClock, TelemetryKey, TelemetryKind};
 use crate::telemetry::Telemetry;
 use crate::types::Ticks;
@@ -329,6 +329,186 @@ where
     #[inline]
     pub fn nanos_to_ticks(&self, ns: u64) -> Ticks {
         self.clock.nanos_to_ticks(ns)
+    }
+
+    /// Return `true` if the input edge `port` can produce a batch under `policy`.
+    ///
+    /// # Semantics
+    ///
+    /// This method provides a *scheduler readiness* predicate aligned with Limen’s
+    /// batching policy interpretation:
+    ///
+    /// - `BatchingPolicy::max_delta_t` is a **span constraint** on the batch contents,
+    ///   not a wall-clock timeout. A candidate batch `[0..k)` is span-valid when:
+    ///
+    ///   `creation_tick[k - 1] - creation_tick[0] <= max_delta_t`
+    ///
+    ///   i.e., all items in the batch lie within `max_delta_t` ticks of the **front
+    ///   (oldest) item**.
+    ///
+    /// - When `fixed_n` is set and `max_delta_t` is not set, readiness requires
+    ///   `occupancy >= fixed_n`.
+    ///
+    /// - When `max_delta_t` is set and `fixed_n` is not set, readiness requires only
+    ///   that the queue is non-empty (a span-valid batch of size 1 always exists).
+    ///
+    /// - When **both** `fixed_n` and `max_delta_t` are set, readiness requires that
+    ///   a **full batch of exactly `fixed_n` items** can be formed and that those
+    ///   `fixed_n` items satisfy the span constraint above. This requires peeking
+    ///   both the front item and the `(fixed_n - 1)`-th item without popping.
+    ///
+    /// Conservative behaviour: if peeks fail (concurrent/fallible backends), returns
+    /// `false` rather than assuming readiness.
+    #[inline]
+    pub fn input_edge_has_batch(&mut self, port: usize, policy: &NodePolicy) -> bool {
+        debug_assert!(port < IN);
+
+        let occ = self.in_occupancy(port);
+        if occ.items() == &0 {
+            return false;
+        }
+
+        let fixed_opt = *policy.batching().fixed_n();
+        let delta_opt = *policy.batching().max_delta_t();
+
+        match (fixed_opt, delta_opt) {
+            (Some(fixed_n), None) => *occ.items() >= fixed_n,
+            (None, Some(_max_delta_t)) => {
+                // Span constraint only: a non-empty queue can always produce a span-valid batch of size 1.
+                true
+            }
+            (Some(fixed_n), Some(max_delta_t)) => {
+                // Must be able to form a full fixed_n batch first.
+                if *occ.items() < fixed_n {
+                    return false;
+                }
+
+                // Peek front (index 0) and the last item of the fixed-size batch (index fixed_n - 1).
+                let first = match self.inputs[port].try_peek_at(0) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+
+                let last = match self.inputs[port].try_peek_at(fixed_n - 1) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+
+                let first_ticks = *first.as_ref().header().creation_tick();
+                let last_ticks = *last.as_ref().header().creation_tick();
+
+                let span = last_ticks.saturating_sub(first_ticks);
+                span <= max_delta_t
+            }
+            (None, None) => {
+                // No batching configured: treat as single-message readiness (queue non-empty here).
+                true
+            }
+        }
+    }
+
+    /// Pop up to `nmax` messages from input port `port` as a batch.
+    ///
+    /// Uses node-level `node_policy` to construct a clamped `BatchingPolicy`.
+    /// Only the edge's `try_pop_batch` path is used; we propagate edge errors.
+    /// Telemetry and occupancy gauges are updated *after* the pop by computing
+    /// the post-pop occupancy from a sampled pre-pop occupancy and the
+    /// returned batch size/bytes.
+    pub fn pop_input_messages_as_batch(
+        &mut self,
+        port: usize,
+        nmax: usize,
+        node_policy: &NodePolicy,
+    ) -> Result<crate::prelude::BatchView<'_, Message<InP>>, QueueError> {
+        debug_assert!(port < IN);
+
+        if nmax == 0 {
+            return Err(QueueError::Unsupported);
+        }
+
+        // Build clamped batching policy from node policy.
+        let requested_policy = {
+            let nb = *node_policy.batching();
+
+            BatchingPolicy::with_window(
+                // clamp fixed_n if present
+                nb.fixed_n().map(|f| core::cmp::min(f, nmax)),
+                // preserve max_delta_t as-is
+                *nb.max_delta_t(),
+                // clamp sliding window size/stride if needed
+                match nb.window_kind() {
+                    WindowKind::Disjoint => crate::policy::WindowKind::Disjoint,
+                    WindowKind::Sliding(sw) => {
+                        let size = core::cmp::min(*sw.size(), nmax);
+                        let stride = core::cmp::min(*sw.stride(), size);
+                        WindowKind::Sliding(SlidingWindow::new(size, stride))
+                    }
+                },
+            )
+        };
+
+        // SAMPLE pre-pop occupancy by calling the edge occupancy directly.
+        // This borrows only the input queue immutably (no &mut self).
+        let occ_before = self.inputs[port].occupancy(&self.in_policies[port]);
+
+        // Ask the edge to pop a batch. This may return a Borrowed BatchView
+        // that mutably borrows the input queue; don't call &mut self helpers
+        // that borrow the same field while batch_view is alive.
+        match self.inputs[port].try_pop_batch(&requested_policy) {
+            Ok(mut batch_view) => {
+                let batch_lin = batch_view.len();
+                if batch_lin == 0 {
+                    return Err(QueueError::Empty);
+                }
+
+                // Compute bytes removed as batch payload/header bytes via BatchView's Payload impl.
+                //
+                // NOTE: Not currently required as bytes not returned in telemetry.
+                // let removed_bytes = {
+                //     // BatchView implements Payload for Message<P>, so we can call buffer_descriptor.
+                //     let desc = batch_view.buffer_descriptor();
+                //     *desc.bytes()
+                // };
+
+                // Mark batch boundaries (works for Owned and Borrowed).
+                if let Some(header) = batch_view.first_header_mut() {
+                    header.set_first_in_batch();
+                }
+                if let Some(header) = batch_view.last_header_mut() {
+                    header.set_last_in_batch();
+                }
+
+                // Update telemetry and occupancy gauge:
+                if T::METRICS_ENABLED {
+                    // Increment ingress messages counter by number returned.
+                    // Mutably borrow only the telemetry field (non-overlapping with input queue borrow).
+                    let telemetry = &mut self.telemetry;
+                    telemetry.incr_counter(
+                        TelemetryKey::node(self.node_id, TelemetryKind::IngressMsgs),
+                        batch_lin as u64,
+                    );
+
+                    // Compute post-pop occupancy numbers (saturating to avoid underflow).
+                    let after_items = occ_before.items().saturating_sub(batch_lin);
+
+                    // NOTE: Bytes not currently returned in telemetry.
+                    // let after_bytes = occ_before.bytes().saturating_sub(removed_bytes);
+
+                    // Note: we do not call self.in_occupancy(port) here because that
+                    // would borrow the input queue again. Instead we update the gauge
+                    // directly from calculated values.
+                    telemetry.set_gauge(
+                        TelemetryKey::edge(self.in_edge_ids[port], TelemetryKind::QueueDepth),
+                        after_items as u64,
+                    );
+                }
+
+                Ok(batch_view)
+            }
+
+            // Propagate queue errors as-is.
+            Err(e) => Err(e),
+        }
     }
 }
 

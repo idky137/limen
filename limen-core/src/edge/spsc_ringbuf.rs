@@ -188,6 +188,38 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
         }
     }
 
+    /// Peek at the item at logical position `index` from the front without removing it.
+    ///
+    /// - `index == 0` is equivalent to `try_peek()`.
+    /// - Returns `QueueError::Empty` if the queue is empty **or** if `index >= occupied_len`.
+    ///
+    /// This is used by schedulers/contexts to check `(fixed_n, max_delta_t)` readiness
+    /// without mutating the queue.
+    #[inline]
+    fn try_peek_at(&self, index: usize) -> Result<PeekResponse<'_, Self::Item>, QueueError>
+    where
+        Self::Item: Payload,
+    {
+        let available = self.len_internal();
+        if available == 0 {
+            return Err(QueueError::Empty);
+        }
+        if index >= available {
+            return Err(QueueError::Empty);
+        }
+
+        let (a, b) = self.cons.as_slices();
+
+        // Logical indexing into split slices.
+        let item_ref: &Self::Item = if index < a.len() {
+            &a[index]
+        } else {
+            &b[index - a.len()]
+        };
+
+        Ok(PeekResponse::Borrowed(item_ref))
+    }
+
     fn try_pop_batch(
         &mut self,
         policy: &crate::policy::BatchingPolicy,

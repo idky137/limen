@@ -265,6 +265,23 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         Ok(crate::edge::PeekResponse::Borrowed(r))
     }
 
+    #[inline]
+    fn try_peek_at(
+        &self,
+        index: usize,
+    ) -> Result<crate::edge::PeekResponse<'_, Self::Item>, QueueError> {
+        let available = self.len();
+        if index >= available {
+            return Err(QueueError::Empty);
+        }
+
+        // SAFETY: Under strict SPSC discipline, the slot at `head + index` is valid
+        // for the duration of this borrow, provided the consumer does not advance head
+        // past it during the borrow (which is the caller’s responsibility under SPSC).
+        let r: &Self::Item = self.peek_ref_at_offset(index);
+        Ok(crate::edge::PeekResponse::Borrowed(r))
+    }
+
     fn try_pop_batch(
         &mut self,
         policy: &crate::policy::BatchingPolicy,
