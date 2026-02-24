@@ -72,7 +72,9 @@ pub mod prelude;
 // - **codegen changes**
 //   - sourcenode:
 //     - now has ingress edge policy method
-//     - now has max backlog len const
 //     - ingress occupancy now uses self.ingress_policy (no input)
+//     - now has max backlog len const (test sink node)
+//   - sinknode:
+//     - port input removed from sink
 //
 //

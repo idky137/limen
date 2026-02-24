@@ -127,6 +127,14 @@ where
         output_placement_acceptance: [PlacementAcceptance; 1],
         ingress_policy: EdgePolicy,
     ) -> Self {
+        // Hard check: backlog capacity must be at least the ingress edge max_items.
+        // Use a plain `panic!` with a string literal so this is `const`-friendly.
+        if BACKLOG_CAP < ingress_policy.caps.max_items {
+            panic!(
+                "TestCounterSourceU32_2: backlog capacity must be >= ingress_policy.caps.max_items"
+            );
+        }
+
         Self {
             clock,
             next_value_to_emit: starting_value_inclusive,
@@ -516,7 +524,7 @@ impl Sink<u32, 1> for TestSinkNodeU32_2 {
     }
 
     #[inline]
-    fn consume(&mut self, _port: usize, msg: Message<u32>) -> Result<(), Self::Error> {
+    fn consume(&mut self, msg: &Message<u32>) -> Result<(), Self::Error> {
         #[cfg(feature = "std")]
         let mut random_seed: u32 = {
             let now = std::time::SystemTime::now()
