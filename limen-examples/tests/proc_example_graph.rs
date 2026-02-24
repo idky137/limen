@@ -21,7 +21,7 @@ define_graph! {
 
     nodes {
         0: {
-            ty: limen_core::node::bench::TestCounterSourceU32_2<limen_core::prelude::linux::NoStdLinuxMonotonicClock>,
+            ty: limen_core::node::bench::TestCounterSourceU32_2<limen_core::prelude::linux::NoStdLinuxMonotonicClock, 32>,
             in_ports: 0,
             out_ports: 1,
             in_payload: (),

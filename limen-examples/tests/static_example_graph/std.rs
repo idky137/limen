@@ -8,7 +8,8 @@ use limen_core::node::bench::{
 };
 use limen_core::node::NodeCapabilities;
 use limen_core::policy::{
-    BatchingPolicy, BudgetPolicy, DeadlinePolicy, NodePolicy, WatermarkState,
+    AdmissionPolicy, BatchingPolicy, BudgetPolicy, DeadlinePolicy, EdgePolicy, NodePolicy,
+    OverBudgetAction, QueueCaps, WatermarkState,
 };
 use limen_core::prelude::concurrent::{spawn_telemetry_core, TelemetrySender};
 use limen_core::prelude::graph_telemetry::GraphTelemetry;
@@ -43,6 +44,12 @@ fn std_pipeline_runs_with_std_runtime() {
         DeadlinePolicy::new(false, None, None),
     );
 
+    const INGRESS_POLICY: EdgePolicy = EdgePolicy::new(
+        QueueCaps::new(8, 8, None, None),
+        AdmissionPolicy::DropOldest,
+        OverBudgetAction::Drop,
+    );
+
     // clock
     let clock = NoStdLinuxMonotonicClock::new();
 
@@ -58,6 +65,7 @@ fn std_pipeline_runs_with_std_runtime() {
         NodeCapabilities::default(),
         node_policy,
         [PlacementAcceptance::default()],
+        INGRESS_POLICY,
     );
 
     let map = MapNode::new(

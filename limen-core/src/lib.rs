@@ -78,3 +78,5 @@ pub mod prelude;
 //     - port input removed from sink
 //
 // - Remove INGRESS_POLICIES from graph builder!
+//
+// - ModelNode: add check for max batch compared to want / compute max!

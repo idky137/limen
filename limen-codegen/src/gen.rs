@@ -349,9 +349,11 @@ impl<'a> NonStd<'a> {
     /// Create the edge policy array (`[EdgePolicy; EDGES]`), with ingress
     /// policies first followed by real edge policies.
     fn edge_policies_array(&self) -> TokenStream2 {
-        let ingress = self.ingress_nodes.iter().enumerate().map(|(k, _)| {
-            let kidx = Index::from(k);
-            quote! { INGRESS_POLICIES[#kidx] }
+        let ingress = self.ingress_nodes.iter().enumerate().map(|(k, &node_idx)| {
+            let _kidx = Index::from(k);
+            let npos = Index::from(node_idx);
+            // Query the source's ingress_policy at runtime.
+            quote! { self.nodes.#npos.node().source_ref().ingress_policy() }
         });
 
         let reals = self.g.edges.iter().enumerate().map(|(j, _)| {
@@ -367,23 +369,6 @@ impl<'a> NonStd<'a> {
         }
     }
 
-    /// Emit a constant with ingress policies (if any).
-    ///
-    /// This creates:
-    /// `const INGRESS_POLICIES: [EdgePolicy; INGRESS_COUNT] = [ ... ];`
-    fn ingress_policies_const(&self) -> TokenStream2 {
-        let cnt = self.ingress_count();
-        if cnt == 0 {
-            quote! {}
-        } else {
-            let elems = self.ingress_policies.iter();
-            quote! {
-                #[allow(dead_code)]
-                const INGRESS_POLICIES: [limen_core::policy::EdgePolicy; #cnt] = [ #( #elems ),* ];
-            }
-        }
-    }
-
     /// Match on an edge id `E` and return its `EdgeOccupancy`.
     ///
     /// - For ingress edges: ask the owning source node via `ingress_occupancy(..)`.
@@ -396,7 +381,7 @@ impl<'a> NonStd<'a> {
             quote! {
                 #k => {
                     let src = self.nodes.#npos.node().source_ref();
-                    Ok(src.ingress_occupancy(&INGRESS_POLICIES[#k]))
+                    Ok(src.ingress_occupancy())
                 }
             }
         });
@@ -771,11 +756,7 @@ impl<'a> NonStd<'a> {
         let node_types = self.graph_node_types_impls(name);
         let node_ctx = self.graph_node_ctx_impls(name);
 
-        let ingress_pols_const = self.ingress_policies_const();
-
         quote! {
-            #ingress_pols_const
-
             /// Non-std (embedded) graph flavor for this pipeline.
             ///
             /// This variant stores edges as plain `EdgeLink<Q, P>` using the queue
@@ -1200,20 +1181,6 @@ impl<'a> Std<'a> {
         }
     }
 
-    /// Emit a constant with ingress policies (if any) for the concurrent graph.
-    fn ingress_policies_const(&self) -> TokenStream2 {
-        let cnt = self.ingress_count();
-        if cnt == 0 {
-            quote! {}
-        } else {
-            let elems = self.ingress_policies.iter();
-            quote! {
-                #[allow(dead_code)]
-                const INGRESS_POLICIES: [limen_core::policy::EdgePolicy; #cnt] = [ #( #elems ),* ];
-            }
-        }
-    }
-
     /// Build probe-based ingress edges and keep their `SourceIngressUpdater`s.
     ///
     /// Returns (`decls`, `(edges_tuple, updaters_tuple)`) tokens.
@@ -1237,6 +1204,7 @@ impl<'a> Std<'a> {
                 let nidx = self.ingress_nodes[0];
                 let e_var = format_ident!("ing_e_{}", k);
                 let dn = nidx;
+                let dn_idx = Index::from(dn);
                 let name = format!("ingress{}", k);
                 quote! {
                     (
@@ -1251,7 +1219,7 @@ impl<'a> Std<'a> {
                                 limen_core::types::NodeIndex::from(#dn as usize),
                                 limen_core::types::PortIndex::from(0),
                             ),
-                            INGRESS_POLICIES[#k],
+                            nodes.#dn_idx.as_ref().unwrap().node().source_ref().ingress_policy(),
                             Some(#name),
                         ),
                     )
@@ -1260,6 +1228,7 @@ impl<'a> Std<'a> {
                 let elems = self.ingress_nodes.iter().enumerate().map(|(k, &nidx)| {
                     let e_var = format_ident!("ing_e_{}", k);
                     let dn = nidx;
+                    let dn_idx = Index::from(dn);
                     let name = format!("ingress{}", k);
                     quote! {
                         limen_core::node::source::probe::ConcurrentIngressEdgeLink::from_probe(
@@ -1273,7 +1242,7 @@ impl<'a> Std<'a> {
                                 node: limen_core::types::NodeIndex::from(#dn as usize),
                                 port: limen_core::types::PortIndex::from(0),
                             ),
-                            INGRESS_POLICIES[#k],
+                            nodes.#dn_idx.as_ref().unwrap().node().source_ref().ingress_policy(),
                             Some(#name),
                         )
                     }
@@ -1594,7 +1563,8 @@ impl<'a> Std<'a> {
     fn edge_policies_array_std(&self) -> TokenStream2 {
         let ingress = self.ingress_nodes.iter().enumerate().map(|(k, _)| {
             let kidx = Index::from(k);
-            quote! { INGRESS_POLICIES[#kidx] }
+            // Use the probe link's policy stored in `self.ingress_edges`.
+            quote! { self.ingress_edges.#kidx.policy() }
         });
         let reals = self.g.edges.iter().enumerate().map(|(j, _)| {
             let jidx = Index::from(j);
@@ -1940,9 +1910,9 @@ impl<'a> Std<'a> {
                     .collect()
             };
 
-            let maybe_ing_update = if let Some(k) = self.source_pos_by_node[i] {
+            let maybe_ing_update = if let Some(_k) = self.source_pos_by_node[i] {
                 quote! {
-                    let occ = node.node().source_ref().ingress_occupancy(&INGRESS_POLICIES[#k]);
+                    let occ = node.node().source_ref().ingress_occupancy();
                     ingress_updater.update(*occ.items(), *occ.bytes());
                 }
             } else {
@@ -2172,7 +2142,6 @@ impl<'a> Std<'a> {
         let node_count = self.g.nodes.len();
         let edge_count = self.ingress_count() + self.g.edges.len();
 
-        let ingress_pols_const = self.ingress_policies_const();
         let edge_descs = self.edge_descriptors_array_std();
         let edge_policies = self.edge_policies_array_std();
         let edge_occ_match = self.edge_occupancy_match_std();
@@ -2195,8 +2164,6 @@ impl<'a> Std<'a> {
             #[cfg(feature = "std")]
             pub mod concurrent_graph {
                 use super::*;
-
-                #ingress_pols_const
 
                 /// Concurrent (std) graph flavor for this pipeline.
                 ///

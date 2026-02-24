@@ -394,7 +394,7 @@ pub mod contract_tests {
     /// Usage:
     ///
     /// ```rust
-    /// contract_tests::define_edge_contract_tests!(static_ring_tests, || {
+    /// limen_core::run_edge_contract_tests!(static_ring_tests, || {
     ///     crate::spsc_array::StaticRing::<crate::message::Message<u32>, 16>::new()
     /// });
     /// ```
