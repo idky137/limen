@@ -10,7 +10,7 @@ use crate::message::{MessageFlags, MessageHeader};
 use crate::node::model::InferenceModel;
 use crate::node::sink::Sink;
 use crate::node::source::Source;
-use crate::types::{DeadlineNs, QoSClass, SequenceNumber, Ticks, TraceId};
+use crate::types::{DeadlineNs, QoSClass, SequenceNumber, TraceId};
 
 #[cfg(feature = "std")]
 use crate::node::source::probe::{SourceIngressProbe, SourceIngressUpdater};
@@ -70,7 +70,7 @@ fn random_test_node_delay(random_state: &mut u32, max_delay_microseconds: u32) {
 /// A test source that:
 /// - Produces an incrementing `u32` on each `try_produce()`.
 /// - Exposes *ingress* pressure via either an internal backlog or a std probe.
-pub struct TestCounterSourceU32_2<Clock>
+pub struct TestCounterSourceU32_2<Clock, const BACKLOG_CAP: usize>
 where
     Clock: PlatformClock,
 {
@@ -91,10 +91,14 @@ where
     node_capabilities: NodeCapabilities,
     node_policy: NodePolicy,
     output_placement_acceptance: [PlacementAcceptance; 1],
+    ingress_policy: EdgePolicy,
 
     // ---- Upstream pressure modelling ----
-    // no_std/internal software backlog (items/bytes before the source).
-    backlog_items: usize,
+    // Layout: circular buffer with head index (oldest) and len (number of items).
+    // Capacity is small and fixed for tests.
+    backlog: [Option<Message<u32>>; BACKLOG_CAP],
+    backlog_head: usize,
+    backlog_len: usize,
     backlog_bytes: usize,
 
     // std optional shared probe (if present, it is authoritative).
@@ -104,7 +108,7 @@ where
     ingress_updater: Option<SourceIngressUpdater>,
 }
 
-impl<Clock> TestCounterSourceU32_2<Clock>
+impl<Clock, const BACKLOG_CAP: usize> TestCounterSourceU32_2<Clock, BACKLOG_CAP>
 where
     Clock: PlatformClock,
 {
@@ -121,6 +125,7 @@ where
         node_capabilities: NodeCapabilities,
         node_policy: NodePolicy,
         output_placement_acceptance: [PlacementAcceptance; 1],
+        ingress_policy: EdgePolicy,
     ) -> Self {
         Self {
             clock,
@@ -133,8 +138,11 @@ where
             node_capabilities,
             node_policy,
             output_placement_acceptance,
-            backlog_items: 0,
-            backlog_bytes: 0,
+            ingress_policy,
+            backlog: [None; BACKLOG_CAP],
+            backlog_head: 0usize,
+            backlog_len: 0usize,
+            backlog_bytes: 0usize,
             #[cfg(feature = "std")]
             ingress_probe: None,
             #[cfg(feature = "std")]
@@ -150,57 +158,81 @@ where
         self
     }
 
-    /// Set a synthetic upstream backlog (items).
     #[inline]
-    pub fn set_upstream_backlog_items(&mut self, n: usize) {
-        self.backlog_items = n;
-    }
-
-    /// Set a synthetic upstream backlog (bytes).
-    #[inline]
-    pub fn set_upstream_backlog_bytes(&mut self, b: usize) {
-        self.backlog_bytes = b;
-    }
-
-    #[inline]
-    fn make_header(&self) -> MessageHeader {
-        let creation_tick: Ticks = self.clock.now_ticks();
-
-        MessageHeader::new(
-            self.trace_id,
-            self.next_sequence,
-            creation_tick,
-            self.deadline_ns,
-            self.qos,
-            0,
-            self.flags,
-            MemoryClass::Host,
+    fn make_message(&self) -> Message<u32> {
+        Message::new(
+            MessageHeader::new(
+                self.trace_id,
+                self.next_sequence,
+                self.clock.now_ticks(),
+                self.deadline_ns,
+                self.qos,
+                core::mem::size_of::<u32>(),
+                self.flags,
+                MemoryClass::Host,
+            ),
+            self.next_value_to_emit,
         )
     }
 
+    /// Set a synthetic upstream backlog (items).
     #[inline]
-    fn advance_counters(&mut self) {
-        // Wrapping increments are fine for a test source.
-        self.next_value_to_emit = self.next_value_to_emit.wrapping_add(1);
-        self.next_sequence = SequenceNumber::new(self.next_sequence.as_u64().wrapping_add(1));
+    pub fn produce_n_items_in_backlog(&mut self, n: usize) {
+        // Append up to `n` synthetic items into the ring backlog without
+        // clearing existing items. If capacity reached, stop appending.
+        let mut to_add = n;
+        while to_add > 0 && self.backlog_len < BACKLOG_CAP {
+            let tail = (self.backlog_head + self.backlog_len) % BACKLOG_CAP;
+            self.backlog[tail] = Some(self.make_message());
+
+            self.backlog_len += 1;
+            to_add = to_add.saturating_sub(1);
+            self.backlog_bytes = self.backlog_len * core::mem::size_of::<u32>();
+
+            self.next_value_to_emit = self.next_value_to_emit.wrapping_add(1);
+            self.next_sequence = SequenceNumber::new(self.next_sequence.as_u64().wrapping_add(1));
+        }
     }
 
-    /// Consume one unit from the software backlog when we successfully produce.
+    /// Pop the oldest message from the software backlog (ring), if any.
+    ///
+    /// Returns `None` if the backlog is empty. This is destructive: it removes the
+    /// oldest item and advances the ring head.
     #[inline]
-    fn consume_software_backlog_one(&mut self) {
-        if self.backlog_items > 0 {
-            self.backlog_items -= 1;
+    fn try_pop_from_backlog(&mut self) -> Option<Message<u32>> {
+        if self.backlog_len == 0 {
+            return None;
         }
-        let sz = core::mem::size_of::<u32>();
-        if self.backlog_bytes >= sz {
-            self.backlog_bytes -= sz;
+
+        let head_index = self.backlog_head;
+
+        // Remove the oldest entry.
+        let message = self.backlog[head_index].take();
+
+        // Advance head and shrink length.
+        self.backlog_head = (self.backlog_head + 1) % BACKLOG_CAP;
+        self.backlog_len = self.backlog_len.saturating_sub(1);
+
+        // Keep bytes consistent with counters.
+        self.backlog_bytes = self.backlog_len * core::mem::size_of::<u32>();
+
+        message
+    }
+
+    #[inline]
+    fn random_backlog_add_count(&self) -> usize {
+        // Use the platform clock tick parity as a cheap jitter source.
+        // Even -> add 1, odd -> add 2.
+        let now_ticks_u64 = *self.clock.now_ticks().as_u64();
+        if (now_ticks_u64 & 1) == 0 {
+            1
         } else {
-            self.backlog_bytes = 0;
+            2
         }
     }
 }
 
-impl<Clock> Source<u32, 1> for TestCounterSourceU32_2<Clock>
+impl<Clock, const BACKLOG_CAP: usize> Source<u32, 1> for TestCounterSourceU32_2<Clock, BACKLOG_CAP>
 where
     Clock: PlatformClock,
 {
@@ -213,6 +245,7 @@ where
 
     #[inline]
     fn try_produce(&mut self) -> Option<(usize, Message<u32>)> {
+        // Random test delay.
         #[cfg(feature = "std")]
         let mut random_seed: u32 = {
             let now = std::time::SystemTime::now()
@@ -224,29 +257,27 @@ where
         let mut random_seed = 1;
         random_test_node_delay(&mut random_seed, 250);
 
-        // Produce one message on port 0.
-        let header = self.make_header();
-        let msg = Message::new(header, self.next_value_to_emit);
+        // Random ingress pressure update.
+        self.produce_n_items_in_backlog(self.random_backlog_add_count());
 
-        // Advance header counters and consume one item from the *software* backlog.
-        // (If a std probe is attached, the external thread should decrement that.)
-        self.advance_counters();
-        self.consume_software_backlog_one();
-
-        Some((0, msg))
+        // Pop and send message.
+        match self.try_pop_from_backlog() {
+            Some(message) => Some((0, message)),
+            None => None,
+        }
     }
 
     #[inline]
-    fn ingress_occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
+    fn ingress_occupancy(&self) -> EdgeOccupancy {
         #[cfg(feature = "std")]
         if let Some(probe) = &self.ingress_probe {
-            return probe.occupancy(policy);
+            return probe.occupancy(&self.ingress_policy());
         }
 
         // Fallback to software backlog counters.
-        let items = self.backlog_items;
+        let items = self.backlog_len;
         let bytes = self.backlog_bytes;
-        EdgeOccupancy::new(items, bytes, policy.watermark(items, bytes))
+        EdgeOccupancy::new(items, bytes, self.ingress_policy.watermark(items, bytes))
     }
 
     #[inline]
@@ -264,33 +295,27 @@ where
         self.node_policy
     }
 
+    fn ingress_policy(&self) -> EdgePolicy {
+        self.ingress_policy
+    }
+
     /// Peek the creation tick of the `item_index`'th ingress item (0 = oldest).
     /// Non-blocking and non-destructive. Returns `None` if metadata is not
     /// available (no backlog) or `item_index` is out of range.
     #[inline]
     fn peek_ingress_creation_tick(&self, item_index: usize) -> Option<u64> {
         // If no backlog, nothing to peek.
-        if self.backlog_items == 0 {
+        if (self.backlog_len == 0) || (item_index >= self.backlog_len) {
             return None;
         }
 
-        // Out-of-range indices -> unavailable.
-        if item_index >= self.backlog_items {
-            return None;
-        }
-
-        // Synthesize stable creation ticks for the backlog:
-        // - anchor at "now" and place the oldest backlog item at `now - backlog_items`
-        // - subsequent items are +1 tick apart. This is deterministic and sufficient
-        //   for unit-testing batching/span logic.
-        //
-        // Note: `Ticks` must provide an accessor to u64; use the correct one
-        // for your project. Replace `as_u64()` if your `Ticks` type uses
-        // another method.
-        let now_ticks = self.clock.now_ticks();
-        let now_u64 = now_ticks.as_u64();
-        let oldest = now_u64.saturating_sub(self.backlog_items as u64);
-        Some(oldest + item_index as u64)
+        Some(
+            *self.backlog[item_index]
+                .unwrap()
+                .header()
+                .creation_tick()
+                .as_u64(),
+        )
     }
 }
 

@@ -498,14 +498,6 @@ where
         C: PlatformClock + Sized,
         T: Telemetry + Sized,
     {
-        // Determine whether the node's policy indicates batch-mode behavior.
-        let policy = self.node.policy();
-        let batching_enabled = {
-            let nb = policy.batching();
-
-            (nb.fixed_n().unwrap_or(1) > 1) || nb.max_delta_t().is_some()
-        };
-
         // If metrics are completely disabled for this Telemetry type, delegate to the
         // appropriate node entrypoint (batch vs single-message).
         if !T::METRICS_ENABLED {

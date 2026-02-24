@@ -71,7 +71,7 @@ where
     ///
     /// `policy` is provided so implementations can compute a consistent
     /// `EdgeOccupancy.watermark` using the same thresholds as real edges.
-    fn ingress_occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy;
+    fn ingress_occupancy(&self) -> EdgeOccupancy;
 
     /// Return the creation tick of the `index`'th ingress item (0-based) without
     /// dequeuing it. Implementations must be non-blocking and non-destructive.
@@ -265,9 +265,7 @@ where
         C: PlatformClock + Sized,
         T: Telemetry + Sized,
     {
-        let ingress_occ = self
-            .source_ref()
-            .ingress_occupancy(&self.source_ref().ingress_policy());
+        let ingress_occ = self.source_ref().ingress_occupancy();
         if *ingress_occ.items() == 0 {
             return Ok(StepResult::NoInput);
         }
@@ -435,8 +433,8 @@ where
     }
 
     #[inline]
-    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
-        self.src.ingress_occupancy(policy)
+    fn occupancy(&self, _policy: &EdgePolicy) -> EdgeOccupancy {
+        self.src.ingress_occupancy()
     }
 
     #[inline]

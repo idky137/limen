@@ -68,3 +68,11 @@ pub mod prelude;
 //
 // - privatise outstepcontext and other internal helpers
 //
+//
+// - **codegen changes**
+//   - sourcenode:
+//     - now has ingress edge policy method
+//     - now has max backlog len const
+//     - ingress occupancy now uses self.ingress_policy (no input)
+//
+//
