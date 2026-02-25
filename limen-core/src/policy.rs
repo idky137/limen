@@ -8,8 +8,6 @@ use crate::types::{DeadlineNs, QoSClass, Ticks};
 /// advancing by `stride` items per step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlidingWindow {
-    /// Number of items in each produced window.
-    size: usize,
     /// Number of items the window start advances between consecutive windows.
     stride: usize,
 }
@@ -17,36 +15,16 @@ pub struct SlidingWindow {
 impl SlidingWindow {
     /// Creates a new sliding window configuration.
     ///
-    /// `size` is the number of items in each produced window.
-    ///
     /// `stride` is how many items the window start advances between consecutive windows.
-    ///
-    /// `stride` must be less than or equal to `size`.
     #[must_use]
-    pub fn new(size: usize, stride: usize) -> Self {
-        debug_assert!(stride <= size, "sliding window requires stride <= size");
-        Self { size, stride }
-    }
-
-    /// Returns the number of items in each produced window.
-    #[must_use]
-    pub fn size(&self) -> &usize {
-        &self.size
+    pub fn new(stride: usize) -> Self {
+        Self { stride }
     }
 
     /// Returns how many items the window start advances between consecutive windows.
     #[must_use]
     pub fn stride(&self) -> &usize {
         &self.stride
-    }
-
-    /// Returns `true` if this sliding window configuration is equivalent to a disjoint policy.
-    ///
-    /// This is the case when `stride == size`, meaning windows do not overlap and each
-    /// step advances by exactly one full window.
-    #[must_use]
-    pub fn is_disjoint_equivalent(&self) -> bool {
-        self.stride == self.size
     }
 }
 

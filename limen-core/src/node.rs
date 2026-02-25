@@ -453,9 +453,9 @@ where
                 match nb.window_kind() {
                     WindowKind::Disjoint => WindowKind::Disjoint,
                     WindowKind::Sliding(sw) => {
-                        let size = core::cmp::min(*sw.size(), nmax);
+                        let size = nb.fixed_n().map(|f| core::cmp::min(f, nmax)).unwrap_or(1);
                         let stride = core::cmp::min(*sw.stride(), size);
-                        WindowKind::Sliding(SlidingWindow::new(size, stride))
+                        WindowKind::Sliding(SlidingWindow::new(stride))
                     }
                 },
             )
@@ -561,9 +561,9 @@ where
                 match nb.window_kind() {
                     WindowKind::Disjoint => WindowKind::Disjoint,
                     WindowKind::Sliding(sw) => {
-                        let size = core::cmp::min(*sw.size(), nmax);
+                        let size = nb.fixed_n().map(|f| core::cmp::min(f, nmax)).unwrap_or(1);
                         let stride = core::cmp::min(*sw.stride(), size);
-                        WindowKind::Sliding(SlidingWindow::new(size, stride))
+                        WindowKind::Sliding(SlidingWindow::new(stride))
                     }
                 },
             )

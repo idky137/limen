@@ -712,7 +712,7 @@ pub mod contract_tests {
         }
 
         // sliding window: size=4 stride=2  => should return items [1,2,3,4] but only pop 2 (1,2).
-        let sw = crate::policy::WindowKind::Sliding(crate::policy::SlidingWindow::new(4, 2));
+        let sw = crate::policy::WindowKind::Sliding(crate::policy::SlidingWindow::new(2));
         let batch_policy = crate::policy::BatchingPolicy::with_window(Some(4), None, sw);
         let batch = q.try_pop_batch(&batch_policy).expect("batch");
         let batch_ref = batch.as_batch();

@@ -354,7 +354,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscAtomicRing<Message<P>> {
         // --- Sliding windows: present `size` but pop `stride`.
         if let WindowKind::Sliding(sw) = window_kind {
             let stride = *sw.stride();
-            let size = *sw.size();
+            let size = effective_fixed.unwrap_or(1);
 
             let mut max_present = core::cmp::min(available, size);
             max_present = apply_fixed(core::cmp::min(max_present, delta_count));

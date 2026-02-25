@@ -311,7 +311,7 @@ impl<P: Payload + std::clone::Clone> Edge for SpscRingbuf<Message<P>> {
         // --- Sliding windows: return `size` items (cloned), pop only `stride`.
         if let WindowKind::Sliding(sw) = window_kind {
             let stride = *sw.stride();
-            let size = *sw.size();
+            let size = effective_fixed.unwrap_or(1);
 
             // Present is bounded by availability, size, delta_count, and fixed.
             let mut present_n = core::cmp::min(available, size);

@@ -233,7 +233,7 @@ impl<P: Payload + Clone> Edge for HeapRing<Message<P>> {
         // --- Sliding windows: present `size` but pop `stride`.
         if let WindowKind::Sliding(sw) = window_kind {
             let stride = *sw.stride();
-            let size = *sw.size();
+            let size = effective_fixed.unwrap_or(1);
 
             // Determine how many items we can present, bounded by availability, size, delta_count, and fixed.
             let mut max_present = core::cmp::min(self.len(), size);

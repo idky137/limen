@@ -58,22 +58,3 @@ pub mod node;
 pub mod runtime;
 
 pub mod prelude;
-
-// current PR notes:
-//
-// - what is nmax / what shoud it be?
-//   - pop_input_messages_as_batch has nmax as well as node policy fixed_n. this should be the  actual nodes max batch, where does this come from?
-//   - model node should make sure nmax =< fixed_n in new method.
-//
-// - batch policy, sliding window should only have stride, size comes from nmax.
-//
-// - privatise outstepcontext and other internal helpers
-//
-//
-// - **codegen changes**
-//   - sourcenode:
-//     - now has ingress edge policy method
-//     - ingress occupancy now uses self.ingress_policy (no input)
-//     - now has max backlog len const (test sink node)
-//   - sinknode:
-//     - port input removed from sink
