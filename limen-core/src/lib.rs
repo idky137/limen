@@ -63,6 +63,7 @@ pub mod prelude;
 //
 // - what is nmax / what shoud it be?
 //   - pop_input_messages_as_batch has nmax as well as node policy fixed_n. this should be the  actual nodes max batch, where does this come from?
+//   - model node should make sure nmax =< fixed_n in new method.
 //
 // - batch policy, sliding window should only have stride, size comes from nmax.
 //
@@ -76,7 +77,3 @@ pub mod prelude;
 //     - now has max backlog len const (test sink node)
 //   - sinknode:
 //     - port input removed from sink
-//
-// - Remove INGRESS_POLICIES from graph builder!
-//
-// - ModelNode: add check for max batch compared to want / compute max!

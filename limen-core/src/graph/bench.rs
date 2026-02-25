@@ -778,8 +778,6 @@ pub mod concurrent_graph {
     #[allow(type_alias_bounds)]
     type SrcNode<SrcClk: PlatformClock + std::marker::Send + 'static> =
         SourceNode<TestCounterSourceU32_2<SrcClk, 32>, u32, 1>;
-    // Per-source ingress policies (S = 1 in this graph). No global default.
-    const INGRESS_POLICIES: [EdgePolicy; 1] = [Q_32_POLICY];
 
     // Test model node types.
     const TEST_MAX_BATCH: usize = 32;
@@ -902,7 +900,13 @@ pub mod concurrent_graph {
                 EdgeIndex::from(0usize),
                 PortId::new(EXTERNAL_INGRESS_NODE, PortIndex::from(0)),
                 PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
-                INGRESS_POLICIES[0],
+                nodes
+                    .0
+                    .as_ref()
+                    .unwrap()
+                    .node()
+                    .source_ref()
+                    .ingress_policy(),
                 Some("ingress0"),
             );
             let ingress_edges = [ingress_edge_0];
@@ -984,7 +988,13 @@ pub mod concurrent_graph {
         #[inline]
         fn get_edge_policies(&self) -> [EdgePolicy; 3] {
             [
-                INGRESS_POLICIES[0],
+                self.nodes
+                    .0
+                    .as_ref()
+                    .unwrap()
+                    .node()
+                    .source_ref()
+                    .ingress_policy(),
                 *self.edges.0.policy(),
                 *self.edges.1.policy(),
             ]
