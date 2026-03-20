@@ -141,6 +141,7 @@ impl<P: Payload> ConcurrentMemoryManagerShared<P> {
     ///
     /// The `mem_class` parameter describes where the memory logically resides.
     fn new(mem_class: MemoryClass, capacity: usize) -> Self {
+        assert!(capacity <= u32::MAX as usize);
         // Initialize slots vector with RwLocks protecting empty states.
         let mut slots = Vec::with_capacity(capacity);
         for _ in 0..capacity {
@@ -367,7 +368,7 @@ impl<P: Payload> ConcurrentMemoryManager<P> {
         // Acquire read lock and validate allocation.
         let guard = slot.state.read().map_err(|_| MemoryError::Poisoned)?;
         if guard.message.is_none() {
-            return Err(MemoryError::NotAllocated);
+            return Err(MemoryError::BadToken);
         }
 
         Ok(ConcurrentReadGuard { guard })
@@ -390,7 +391,7 @@ impl<P: Payload> ConcurrentMemoryManager<P> {
         // Acquire write lock which excludes readers/writers on the slot.
         let guard = slot.state.write().map_err(|_| MemoryError::Poisoned)?;
         if guard.message.is_none() {
-            return Err(MemoryError::NotAllocated);
+            return Err(MemoryError::BadToken);
         }
         Ok(ConcurrentWriteGuard { guard })
     }
@@ -524,7 +525,7 @@ impl<P: Payload> HeaderStore for ConcurrentMemoryManager<P> {
         // Acquire read lock and validate that slot is allocated.
         let guard = slot.state.read().map_err(|_| MemoryError::Poisoned)?;
         if guard.message.is_none() {
-            return Err(MemoryError::NotAllocated);
+            return Err(MemoryError::BadToken);
         }
 
         Ok(ConcurrentHeaderGuard { guard })

@@ -1,4 +1,10 @@
-//! Small shared types and identifiers used throughout the core.
+//! Small shared value types and identifiers used across `limen-core`.
+//!
+//! This module contains:
+//! - strongly-typed IDs for tracing, graph topology, and memory handles,
+//! - timing and scheduling scalars,
+//! - QoS ordering primitives, and
+//! - payload datatype markers (including `F16` and `BF16` wrappers).
 
 // ***** Tracing *****
 

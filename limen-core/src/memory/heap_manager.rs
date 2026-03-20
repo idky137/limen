@@ -1,5 +1,3 @@
-#![cfg_attr(not(feature = "std"), no_std)]
-
 //! Heap-backed fixed-capacity memory manager.
 //!
 //! Provides a fixed-capacity heap-backed manager that stores `Message<P>`
@@ -113,7 +111,7 @@ mod unchecked {
             self.slots[idx]
                 .as_ref()
                 .map(|m| m.header())
-                .ok_or(MemoryError::NotAllocated)
+                .ok_or(MemoryError::BadToken)
         }
     }
 
@@ -144,7 +142,7 @@ mod unchecked {
             if idx >= self.slots.len() {
                 return Err(MemoryError::BadToken);
             }
-            self.slots[idx].as_ref().ok_or(MemoryError::NotAllocated)
+            self.slots[idx].as_ref().ok_or(MemoryError::BadToken)
         }
 
         fn read_mut(&mut self, token: MessageToken) -> Result<Self::WriteGuard<'_>, MemoryError> {
@@ -152,7 +150,7 @@ mod unchecked {
             if idx >= self.slots.len() {
                 return Err(MemoryError::BadToken);
             }
-            self.slots[idx].as_mut().ok_or(MemoryError::NotAllocated)
+            self.slots[idx].as_mut().ok_or(MemoryError::BadToken)
         }
 
         fn free(&mut self, token: MessageToken) -> Result<(), MemoryError> {
@@ -193,11 +191,14 @@ mod checked {
     const WRITE_BORROW_MARK: u16 = u16::MAX;
 
     fn try_increment_read(cell: &Cell<u16>) -> Result<(), MemoryError> {
-        let v = cell.get();
-        if v == WRITE_BORROW_MARK {
+        let value = cell.get();
+        if value == WRITE_BORROW_MARK {
             return Err(MemoryError::AlreadyBorrowed);
         }
-        cell.set(v.saturating_add(1));
+        if value == WRITE_BORROW_MARK - 1 {
+            return Err(MemoryError::AlreadyBorrowed);
+        }
+        cell.set(value + 1);
         Ok(())
     }
 
@@ -306,7 +307,7 @@ mod checked {
                         borrow_state: &self.borrow_states[idx],
                     })
                 }
-                None => Err(MemoryError::NotAllocated),
+                None => Err(MemoryError::BadToken),
             }
         }
     }
@@ -348,7 +349,7 @@ mod checked {
                         borrow_state: &self.borrow_states[idx],
                     })
                 }
-                None => Err(MemoryError::NotAllocated),
+                None => Err(MemoryError::BadToken),
             }
         }
 
@@ -367,7 +368,7 @@ mod checked {
                         _phantom: PhantomData,
                     })
                 }
-                None => Err(MemoryError::NotAllocated),
+                None => Err(MemoryError::BadToken),
             }
         }
 

@@ -166,7 +166,6 @@ mod unchecked {
 #[cfg(feature = "checked-memory-manager-refs")]
 mod checked {
     use super::*;
-    use core::marker::PhantomData;
 
     // Borrow-state representation
     //
@@ -177,12 +176,14 @@ mod checked {
     const WRITE_BORROW_MARK: u16 = u16::MAX;
 
     fn try_increment_read(cell: &Cell<u16>) -> Result<(), MemoryError> {
-        let v = cell.get();
-        if v == WRITE_BORROW_MARK {
+        let value = cell.get();
+        if value == WRITE_BORROW_MARK {
             return Err(MemoryError::AlreadyBorrowed);
         }
-        // saturating_add guards against overflow. Practically DEPTH is small.
-        cell.set(v.saturating_add(1));
+        if value == WRITE_BORROW_MARK - 1 {
+            return Err(MemoryError::AlreadyBorrowed);
+        }
+        cell.set(value + 1);
         Ok(())
     }
 
@@ -250,8 +251,6 @@ mod checked {
     pub struct StaticWriteGuard<'a, P: Payload> {
         msg: &'a mut Message<P>,
         borrow_state: &'a Cell<u16>,
-        // This phantom is just to satisfy variance/lifetime checks cleanly.
-        _phantom: PhantomData<&'a mut Message<P>>,
     }
 
     impl<'a, P: Payload> Deref for StaticWriteGuard<'a, P> {
@@ -351,7 +350,6 @@ mod checked {
                     Ok(StaticWriteGuard {
                         msg,
                         borrow_state: &self.borrow_states[idx],
-                        _phantom: PhantomData,
                     })
                 }
                 None => Err(MemoryError::BadToken),

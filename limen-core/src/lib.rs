@@ -78,3 +78,9 @@ pub mod prelude;
 //  Phase 5 (StepContext).
 //
 // REMOVE ADMISSION INFO!!!
+//
+// FINAL CLEANUP AT END OF PR:
+// - batch types
+// - tensor types
+// - extra message description trait
+// - check tests (memory manager contract tests?)

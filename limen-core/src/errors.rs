@@ -1,8 +1,8 @@
 //! Error families used across Limen Core.
 //!
-//! Errors are designed to be allocation-free in P0, bounded in P1, and richer
-//! in P2. The types here avoid `std::error::Error` unless the `std` feature is
-//! enabled.
+//! Errors are designed to stay lightweight and `no_std` friendly by default.
+//! Implementations of `std::error::Error` are only provided when the `std`
+//! feature is enabled.
 
 use core::fmt;
 
