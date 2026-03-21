@@ -60,10 +60,7 @@ pub mod runtime;
 pub mod prelude;
 
 // **PR NOTES**:
-// - step context must have scratch buffer = nodes n_max - All nodes should expose an n_max (or should be configurable), this should probably be separate to node policy fixed_n, fixed_n should be the desired batch size and n_max the capacity, these should bpth be configurabe. (only required for stride enabled batches or concurrent graphs.)
 // - fix feature boundary (edges are confused)(default, alloc (untilises alloc), std (enables multithreading))
-// - can we remove concurrentedgelink and use a concurrent friendly memory manager instead? (maybe not..)
-// - single interface for nodes to use.
 
 // Phase 3d: Eviction design note
 //
@@ -84,3 +81,6 @@ pub mod prelude;
 // - tensor types
 // - extra message description trait
 // - check tests (memory manager contract tests?)
+//
+// Ensure concurrent runtime only accepts concurrent graph at compile time.
+// Only emit non-std graoh **or**std graph, not both!

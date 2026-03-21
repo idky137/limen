@@ -54,23 +54,24 @@
 //!
 //!        edges {
 //!            0: {
-//!                ty: limen_core::edge::spsc_ringbuf::SpscRingbuf<u32, 64>,
+//!                ty: limen_core::edge::bench::TestSpscRingBuf<8>,
 //!                payload: u32,
+//!                manager: limen_core::memory::static_manager::StaticMemoryManager<u32, 8>,
 //!                from: (0, 0),
 //!                to: (1, 0),
 //!                policy: my_crate::policies::EDGE_POLICY,
 //!                name: Some("src->map")
 //!            },
 //!            1: {
-//!                ty: limen_core::edge::spsc_ringbuf::SpscRingbuf<u32, 64>,
+//!                ty: limen_core::edge::bench::TestSpscRingBuf<8>,
 //!                payload: u32,
+//!                manager: limen_core::memory::static_manager::StaticMemoryManager<u32, 8>,
 //!                from: (1, 0),
 //!                to: (2, 0),
 //!                policy: my_crate::policies::EDGE_POLICY,
 //!                name: Some("map->sink")
 //!            },
 //!        }
-//!    }
 //!    ```
 //!
 //! 2. **Build-script mode** (recommended when proc-macros slow down the language server or you want to inspect/generated source):
@@ -144,8 +145,10 @@
 //!
 //! **Edge fields** (all required unless marked optional):
 //!
-//! - `ty: <TypePath>` — Queue implementation type for this edge (for example, `SpscRingbuf<T, N>`).
+//! - `ty: <TypePath>` — Queue implementation type for this edge (for example, `TestSpscRingBuf<8>`).
 //! - `payload: <Type>` — Payload carried on this edge (must match node `out_payload` / `in_payload`).
+//! - `manager: <TypePath>` — Memory manager implementation for this edge (for example,
+//!   `StaticMemoryManager<P, DEPTH>` for `no_std` or `ConcurrentMemoryManager<P>` for concurrent graphs).
 //! - `from: (<usize>, <usize>)` — `(node_index, out_port_index)`.
 //! - `to: (<usize>, <usize>)` — `(node_index, in_port_index)`.
 //! - `policy: <Expr>` — Policy value used to compute occupancy and admission.
@@ -173,7 +176,12 @@
 //!    - All outbound edges from the same node must have an identical queue type.
 //!    - This allows the generator to infer a single `InQ` and `OutQ` type per node.
 //!
-//! 5. **Ingress edges (synthetic)**  
+//! 5. **Manager uniformity per node**
+//!    - All inbound edges to the same node must have an identical manager type.
+//!    - All outbound edges from the same node must have an identical manager type.
+//!    - This allows the generator to infer a single `InM` and `OutM` type per node.
+//!
+//! 6. **Ingress edges (synthetic)**  
 //!    - If a node specifies `ingress_policy`, a *synthetic* ingress edge is created for that node.
 //!    - Ingress edges do **not** live in the real `edges` tuple and do **not** carry data;
 //!      they exist to expose external ingress occupancy via the node’s source interface.
@@ -181,7 +189,7 @@
 //!      (`in_ports == 0` and `out_ports > 0`) that implement the source interface in `limen-core`.
 //!      These ingress edges occupy the lowest global edge indices `[0..ingress_count)`.
 //!
-//! 6. **Dependency on `limen-core`**  
+//! 7. **Dependency on `limen-core`**  
 //!    - Generated code references the `limen_core` crate (note the underscore), which must be
 //!      available to the downstream crate. Ensure your Cargo manifest includes a dependency on
 //!      `limen-core` (the hyphenated package name maps to the `limen_core` crate identifier).

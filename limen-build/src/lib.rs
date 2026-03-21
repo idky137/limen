@@ -32,8 +32,8 @@ use quote::quote;
 ///     }
 ///
 ///     edges {
-///         0: { ty: my::Q<u32>, payload: u32, from: (0, 0), to: (1, 0), policy: EDGE_POL, name: Some("src->map") },
-///         1: { ty: my::Q<u32>, payload: u32, from: (1, 0), to: (2, 0), policy: EDGE_POL, name: Some("map->sink") },
+///         0: { ty: limen_core::edge::bench::TestSpscRingBuf<8>, payload: u32, manager: limen_core::memory::static_manager::StaticMemoryManager<u32, 8>, from: (0, 0), to: (1, 0), policy: EDGE_POL, name: Some("src->map") },
+///         1: { ty: limen_core::edge::bench::TestSpscRingBuf<8>, payload: u32, manager: limen_core::memory::static_manager::StaticMemoryManager<u32, 8>, from: (1, 0), to: (2, 0), policy: EDGE_POL, name: Some("map->sink") },
 ///     }
 /// }
 /// ```

@@ -24,6 +24,16 @@ pub struct GraphDef {
     pub nodes: Vec<NodeDef>,
     /// All edge declarations for this graph, indexed by `EdgeDef::idx`.
     pub edges: Vec<EdgeDef>,
+    /// Whether to emit the concurrent (`std`-gated) graph flavor.
+    ///
+    /// When `false` (default), only the non-std graph is generated. When
+    /// `true`, an additional `pub mod concurrent_graph` is emitted behind
+    /// `#[cfg(feature = "std")]` containing the `<Name>Std` graph with
+    /// owned-bundle handoff support.
+    ///
+    /// Users must ensure that their `manager_ty` satisfies `Clone + Send +
+    /// 'static` (e.g. `ConcurrentMemoryManager<P>`) when enabling this.
+    pub emit_concurrent: bool,
 }
 
 /// A single node declaration.
@@ -63,11 +73,13 @@ pub struct NodeDef {
 pub struct EdgeDef {
     /// Edge index in the range `0..edges.len()` (validated later).
     pub idx: usize,
-    /// Queue implementation type (e.g., `limen_core::edge::spsc_ringbuf::SpscRingbuf<..>`).
+    /// Queue implementation type (e.g., `limen_core::edge::spsc_array::StaticRing<8>`).
     pub ty: TypePath,
     /// Payload type carried on this edge; must match the connected nodes’
     /// `out_payload` and `in_payload` (validated later).
     pub payload: Type,
+    /// Memory manager implementation.
+    pub manager_ty: TypePath,
     /// Upstream node index (source endpoint).
     pub from_node: usize,
     /// Upstream node output port index.
