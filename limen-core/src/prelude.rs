@@ -27,7 +27,7 @@ pub use crate::memory::concurrent_manager::*;
 pub use crate::telemetry::concurrent::*;
 
 #[cfg(feature = "std")]
-pub use crate::edge::{spsc_concurrent::*, spsc_ringbuf::*};
+pub use crate::edge::spsc_concurrent::*;
 
 #[cfg(feature = "alloc")]
 pub use crate::edge::spsc_vecdeque::*;

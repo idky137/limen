@@ -10,7 +10,6 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::ops::{Deref, DerefMut};
 
 use crate::errors::MemoryError;
 use crate::memory::header_store::HeaderStore;
@@ -22,6 +21,9 @@ use crate::types::MessageToken;
 
 #[cfg(feature = "checked-memory-manager-refs")]
 use core::cell::Cell;
+
+#[cfg(feature = "checked-memory-manager-refs")]
+use core::ops::{Deref, DerefMut};
 
 /// A heap-backed fixed-capacity memory manager.
 pub struct HeapMemoryManager<P: Payload> {
@@ -440,7 +442,8 @@ mod tests {
         let token = mgr.store(make_msg(10)).unwrap();
 
         {
-            let mut msg = mgr.read_mut(token).unwrap();
+            let mut write_guard = mgr.read_mut(token).unwrap();
+            let msg = core::ops::DerefMut::deref_mut(&mut write_guard);
             *msg.payload_mut() = 99;
         }
 
@@ -467,7 +470,7 @@ mod tests {
 
     #[test]
     fn capacity_exhaustion() {
-        let mut mgr: HeapMemoryManager<u32> = HeapMemoryManager::new(4);
+        let mut mgr: HeapMemoryManager<u32> = HeapMemoryManager::new(2);
         let _t0 = mgr.store(make_msg(1)).unwrap();
         let _t1 = mgr.store(make_msg(2)).unwrap();
         assert_eq!(mgr.available(), 0);

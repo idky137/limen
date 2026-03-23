@@ -674,6 +674,7 @@ where
 
     /// Construct an `OutStepContext` by borrowing only the output-related
     /// fields and telemetry from `self`.
+    #[allow(dead_code)]
     #[inline]
     fn to_out_step_context<'ctx>(
         &'ctx mut self,

@@ -143,21 +143,17 @@ impl<const N: usize> Edge for TestSpscRingBuf<N> {
                 self.push_raw(token);
                 EnqueueResult::Enqueued
             }
-
             AdmissionDecision::DropNewest => {
                 // Do not mutate queue; indicate incoming item dropped.
                 EnqueueResult::DroppedNewest
             }
-
             AdmissionDecision::Reject => EnqueueResult::Rejected,
-
             AdmissionDecision::Block => {
                 // Test queue cannot block; translate to Rejected.
                 EnqueueResult::Rejected
             }
-
             AdmissionDecision::Evict(n) => {
-                // Evict up to n oldest items (or fewer if queue empties).
+                let mut last_evicted = MessageToken::INVALID;
                 for _ in 0..n {
                     if self.len == 0 {
                         break;
@@ -168,21 +164,24 @@ impl<const N: usize> Edge for TestSpscRingBuf<N> {
                         .map(|h| *h.payload_size_bytes())
                         .unwrap_or(0);
                     self.bytes = self.bytes.saturating_sub(ev_bytes);
+                    last_evicted = ev;
                 }
 
-                // After evicting, ensure hard caps / fullness are satisfied.
                 if policy.caps.at_or_above_hard(self.len, self.bytes) || self.is_full() {
                     return EnqueueResult::Rejected;
                 }
 
-                // Now try to enqueue.
                 self.bytes = self.bytes.saturating_add(item_bytes);
                 self.push_raw(token);
-                EnqueueResult::Enqueued
-            }
 
+                if last_evicted.is_invalid() {
+                    EnqueueResult::Enqueued
+                } else {
+                    EnqueueResult::Evicted(last_evicted)
+                }
+            }
             AdmissionDecision::EvictUntilBelowHard => {
-                // Evict until the caps report below-hard or queue empties.
+                let mut last_evicted = MessageToken::INVALID;
                 while policy.caps.at_or_above_hard(self.len, self.bytes) && self.len > 0 {
                     let ev = self.pop_raw();
                     let ev_bytes = headers
@@ -190,22 +189,24 @@ impl<const N: usize> Edge for TestSpscRingBuf<N> {
                         .map(|h| *h.payload_size_bytes())
                         .unwrap_or(0);
                     self.bytes = self.bytes.saturating_sub(ev_bytes);
+                    last_evicted = ev;
                 }
 
-                // If the single item cannot fit even into an empty queue, reject.
                 if policy.caps.at_or_above_hard(0, item_bytes) {
                     return EnqueueResult::Rejected;
                 }
-
-                // If still full (ring capacity) then reject.
                 if self.is_full() || policy.caps.at_or_above_hard(self.len, self.bytes) {
                     return EnqueueResult::Rejected;
                 }
 
-                // Accept the item now that we've made room.
                 self.bytes = self.bytes.saturating_add(item_bytes);
                 self.push_raw(token);
-                EnqueueResult::Enqueued
+
+                if last_evicted.is_invalid() {
+                    EnqueueResult::Enqueued
+                } else {
+                    EnqueueResult::Evicted(last_evicted)
+                }
             }
         }
     }

@@ -42,16 +42,6 @@ impl<Q> Clone for ConcurrentQueue<Q> {
     }
 }
 
-impl<Q> ConcurrentQueue<Q>
-where
-    Q: Edge + Send + 'static,
-{
-    /// Helper to lock the inner mutex and map poisoning to `QueueError::Poisoned`.
-    fn lock_inner(&self) -> Result<std::sync::MutexGuard<'_, Q>, QueueError> {
-        self.inner.lock().map_err(|_| QueueError::Poisoned)
-    }
-}
-
 impl<Q> Edge for ConcurrentQueue<Q>
 where
     Q: Edge + Send + 'static,

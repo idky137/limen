@@ -5,8 +5,6 @@
 //!
 //! Default (no feature): plain references are returned: zero-cost for MCU.
 
-use core::ops::{Deref, DerefMut};
-
 use crate::errors::MemoryError;
 use crate::memory::header_store::HeaderStore;
 use crate::memory::manager::MemoryManager;
@@ -17,6 +15,9 @@ use crate::types::MessageToken;
 
 #[cfg(feature = "checked-memory-manager-refs")]
 use core::cell::Cell;
+
+#[cfg(feature = "checked-memory-manager-refs")]
+use core::ops::{Deref, DerefMut};
 
 /// A fixed-capacity memory manager backed by `[Option<Message<P>>; DEPTH]`.
 ///
@@ -424,7 +425,8 @@ mod tests {
         let token = mgr.store(make_msg(10)).unwrap();
 
         {
-            let mut msg = mgr.read_mut(token).unwrap();
+            let mut write_guard = mgr.read_mut(token).unwrap();
+            let msg = core::ops::DerefMut::deref_mut(&mut write_guard);
             *msg.payload_mut() = 99;
         }
 

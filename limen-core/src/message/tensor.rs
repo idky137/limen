@@ -211,6 +211,7 @@ impl<T: Copy + Default + DType, const N: usize, const R: usize> Tensor<T, N, R> 
             flat += index[d] * stride;
             stride *= self.shape[d];
         }
+        assert!(flat < self.len, "tensor index out of bounds");
         flat
     }
 }
@@ -531,10 +532,10 @@ mod tests {
 
     #[test]
     fn nchw_constructor() {
-        let data = [0.0f32; 150528];
-        let t = Tensor::<f32, 150528, 4>::nchw(1, 3, 224, 224, &data);
-        assert_eq!(t.shape(), &[1, 3, 224, 224]);
-        assert_eq!(t.len(), 150528);
+        // 1×3×4×4 = 48 elements — small enough for the test thread stack.
+        let data = [0.0f32; 48];
+        let t = Tensor::<f32, 48, 4>::nchw(1, 3, 4, 4, &data);
+        assert_eq!(t.shape(), &[1, 3, 4, 4]);
     }
 
     // -----------------------------------------------------------------
@@ -559,7 +560,7 @@ mod tests {
     #[test]
     fn at_rank4_nhwc() {
         // 1×2×2×3 NHWC tensor with sequential values.
-        let data: Vec<u8> = (0u8..12).collect();
+        let data: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let t = Tensor::<u8, 12, 4>::nhwc(1, 2, 2, 3, &data);
 
         // [0, 0, 0, 0] = 0, [0, 0, 0, 1] = 1, [0, 0, 0, 2] = 2
@@ -789,8 +790,24 @@ mod tests {
 
     #[test]
     fn debug_format_does_not_panic() {
+        use core::fmt::Write;
+        struct StackBuf([u8; 256], usize);
+        impl Write for StackBuf {
+            fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                for &b in s.as_bytes() {
+                    if self.1 >= self.0.len() {
+                        return Ok(()); // silently truncate
+                    }
+                    self.0[self.1] = b;
+                    self.1 += 1;
+                }
+                Ok(())
+            }
+        }
         let t = Tensor::<f32, 4, 2>::matrix(2, 2, &[1.0, 2.0, 3.0, 4.0]);
-        let s = format!("{:?}", t);
+        let mut buf = StackBuf([0u8; 256], 0);
+        write!(buf, "{:?}", t).unwrap();
+        let s = core::str::from_utf8(&buf.0[..buf.1]).unwrap();
         assert!(s.contains("Tensor"));
         assert!(s.contains("Float32"));
         assert!(s.contains("len: 4"));
@@ -820,7 +837,9 @@ mod tests {
     #[test]
     fn flat_index_row_major_rank3() {
         // 2×3×4 tensor, sequential data.
-        let data: Vec<u32> = (0u32..24).collect();
+        let data: [u32; 24] = [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+        ];
         let t = Tensor::<u32, 24, 3>::from_shape([2, 3, 4], &data);
 
         // Row-major: flat = i*12 + j*4 + k
@@ -837,7 +856,7 @@ mod tests {
     #[test]
     fn flat_index_rank4_exhaustive_small() {
         // 1×2×2×2 = 8 elements.
-        let data: Vec<u8> = (0u8..8).collect();
+        let data: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
         let t = Tensor::<u8, 8, 4>::nhwc(1, 2, 2, 2, &data);
 
         let mut idx = 0u8;

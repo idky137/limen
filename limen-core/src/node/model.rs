@@ -15,7 +15,7 @@
 
 use crate::compute::{BackendCapabilities, ComputeBackend, ComputeModel, ModelMetadata};
 use crate::edge::{Edge, EnqueueResult};
-use crate::errors::{InferenceError, NodeError, QueueError};
+use crate::errors::{InferenceError, NodeError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
 use crate::node::{Node, NodeCapabilities, NodeKind, OutStepContext, StepContext, StepResult};
@@ -26,14 +26,6 @@ use crate::prelude::{MemoryManager, PlatformClock, Telemetry};
 #[inline]
 fn map_inference_err(e: InferenceError) -> NodeError {
     NodeError::execution_failed().with_code(*e.code())
-}
-#[inline]
-fn map_queue_err(e: QueueError) -> NodeError {
-    match e {
-        QueueError::Empty => NodeError::no_input(),
-        QueueError::Backpressured | QueueError::AtOrAboveHardCap => NodeError::backpressured(),
-        QueueError::Unsupported | QueueError::Poisoned => NodeError::execution_failed(),
-    }
 }
 
 /// Generic 1×1 inference node for any backend (dyn-free).

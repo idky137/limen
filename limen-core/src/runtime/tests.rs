@@ -4,7 +4,7 @@ use crate::edge::EdgeOccupancy;
 use crate::graph::bench::TestPipeline;
 use crate::graph::GraphApi;
 use crate::memory::PlacementAcceptance;
-use crate::message::{Message, MessageFlags};
+use crate::message::MessageFlags;
 use crate::node::bench::{
     TestCounterSourceU32_2, TestIdentityModelNodeU32_2, TestSinkNodeU32_2, TestU32Backend,
 };
@@ -20,7 +20,7 @@ use crate::runtime::LimenRuntime;
 use crate::types::{QoSClass, SequenceNumber, TraceId};
 
 // Concrete queue type used by the test pipelines
-type Q32 = crate::edge::bench::TestSpscRingBuf<Message<u32>, 8>;
+type Q32 = crate::edge::bench::TestSpscRingBuf<8>;
 
 const INGRESS_POLICY: EdgePolicy = EdgePolicy {
     caps: crate::policy::QueueCaps {
@@ -109,8 +109,12 @@ fn core_pipeline_runs_with_nostd_runtime() {
     let sink = fixed_buffer_line_writer::<2048>();
     let telemetry: NoStdTestTelemetry = NoStdTestTelemetry::new(0, true, sink);
 
+    // managers
+    let mgr0 = crate::memory::static_manager::StaticMemoryManager::<u32, 8>::new();
+    let mgr1 = crate::memory::static_manager::StaticMemoryManager::<u32, 8>::new();
+
     // graph
-    let mut graph = TestPipeline::new(src, map, snk, q0, q1);
+    let mut graph = TestPipeline::new(src, map, snk, q0, q1, mgr0, mgr1);
 
     // runtime
     let mut runtime: TestNoStdRuntime<NoStdTestClock, NoStdTestTelemetry, 3, 3> =
@@ -261,8 +265,12 @@ fn std_pipeline_runs_with_std_runtime() {
     let telemetry_core = spawn_telemetry_core(inner_telemetry);
     let telemetry: StdTestTelemetry = telemetry_core.sender();
 
+    // managers
+    let mgr0 = crate::memory::concurrent_manager::ConcurrentMemoryManager::<u32>::new(8);
+    let mgr1 = crate::memory::concurrent_manager::ConcurrentMemoryManager::<u32>::new(8);
+
     // graph
-    let mut graph = TestPipelineStd::new(src, map, snk, q0, q1);
+    let mut graph = TestPipelineStd::new(src, map, snk, q0, q1, mgr0, mgr1);
 
     // runtime
     let mut runtime: StdRuntime = StdRuntime::new();

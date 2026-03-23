@@ -13,9 +13,6 @@ pub mod spsc_array;
 pub mod spsc_vecdeque;
 
 #[cfg(feature = "std")]
-pub mod spsc_ringbuf;
-
-#[cfg(feature = "std")]
 pub mod spsc_concurrent;
 
 #[cfg(feature = "spsc_raw")]

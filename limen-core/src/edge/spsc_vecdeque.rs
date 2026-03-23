@@ -89,7 +89,7 @@ impl HeapRing {
 
     /// Ensure there is space to push one token. In bounded mode this is a no-op
     /// (caller should check is_full). In unbounded mode this resizes the buffer
-    /// when necessary to provide room and preserve mem::replace semantics.
+    /// when necessary, linearizing the ring if it has wrapped.
     fn ensure_capacity_for_push(&mut self) {
         if self.cap.is_some() {
             // bounded: buffer was pre-sized at creation; nothing to do.
@@ -98,7 +98,6 @@ impl HeapRing {
 
         // unbounded: ensure buf has at least some capacity and at least one free slot.
         if self.buf.is_empty() {
-            // choose a modest starting capacity
             let start = 4usize;
             self.buf.resize_with(start, MessageToken::default);
             self.head = 0;
@@ -108,9 +107,23 @@ impl HeapRing {
 
         // If buffer is "full" (len == buf.len()), grow by doubling.
         if self.len >= self.buf.len() {
-            let new_cap = core::cmp::max(4, self.buf.len() * 2);
+            let old_cap = self.buf.len();
+            let new_cap = core::cmp::max(4, old_cap * 2);
             self.buf.resize_with(new_cap, MessageToken::default);
-            // No reordering required; we extended the buffer with default placeholders.
+
+            // If the ring had wrapped (head != 0 when full), the items in
+            // [0..tail) need to be relocated past the old capacity boundary
+            // so that the ring becomes contiguous again.
+            if self.head != 0 {
+                for i in 0..self.tail {
+                    self.buf[old_cap + i] = self.buf[i];
+                    self.buf[i] = MessageToken::default();
+                }
+                self.tail = old_cap + self.tail;
+            } else {
+                // Items are contiguous at [0..len); just fix tail.
+                self.tail = self.len;
+            }
         }
     }
 
@@ -149,24 +162,31 @@ impl HeapRing {
 
         let cap = self.physical_capacity();
         if self.head == 0 {
-            self.tail = (self.head + self.len) % cap;
+            self.tail = self.len % cap;
             return;
         }
 
-        // Move live items to the beginning in order, replacing old slots with defaults.
+        // Collect live items in logical order into a temporary buffer.
+        // This avoids the overlap problem that a simple forward copy has
+        // when the ring wraps (head + len > cap).
+        let mut tmp: Vec<MessageToken> = Vec::with_capacity(self.len);
         for i in 0..self.len {
-            let src_idx = (self.head + i) % cap;
-            let tmp = mem::replace(&mut self.buf[src_idx], MessageToken::default());
-            self.buf[i] = tmp;
+            let src = (self.head + i) % cap;
+            tmp.push(mem::replace(&mut self.buf[src], MessageToken::default()));
         }
 
-        // Ensure remaining slots are defaulted.
+        // Write them back contiguously starting at index 0.
+        for (i, tok) in tmp.into_iter().enumerate() {
+            self.buf[i] = tok;
+        }
+
+        // Default remaining slots.
         for i in self.len..cap {
-            let _ = mem::replace(&mut self.buf[i], MessageToken::default());
+            self.buf[i] = MessageToken::default();
         }
 
         self.head = 0;
-        self.tail = (self.head + self.len) % cap;
+        self.tail = self.len % cap;
     }
 }
 

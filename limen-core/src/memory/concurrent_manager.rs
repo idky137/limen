@@ -368,7 +368,7 @@ impl<P: Payload> ConcurrentMemoryManager<P> {
         // Acquire read lock and validate allocation.
         let guard = slot.state.read().map_err(|_| MemoryError::Poisoned)?;
         if guard.message.is_none() {
-            return Err(MemoryError::BadToken);
+            return Err(MemoryError::NotAllocated);
         }
 
         Ok(ConcurrentReadGuard { guard })
@@ -391,7 +391,7 @@ impl<P: Payload> ConcurrentMemoryManager<P> {
         // Acquire write lock which excludes readers/writers on the slot.
         let guard = slot.state.write().map_err(|_| MemoryError::Poisoned)?;
         if guard.message.is_none() {
-            return Err(MemoryError::BadToken);
+            return Err(MemoryError::NotAllocated);
         }
         Ok(ConcurrentWriteGuard { guard })
     }
@@ -525,7 +525,7 @@ impl<P: Payload> HeaderStore for ConcurrentMemoryManager<P> {
         // Acquire read lock and validate that slot is allocated.
         let guard = slot.state.read().map_err(|_| MemoryError::Poisoned)?;
         if guard.message.is_none() {
-            return Err(MemoryError::BadToken);
+            return Err(MemoryError::NotAllocated);
         }
 
         Ok(ConcurrentHeaderGuard { guard })
