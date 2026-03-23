@@ -1,15 +1,18 @@
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches:
+      - main
+      - release/*
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        profile: [no-default-features, alloc, std]
+        profile: [no-default-features, alloc, std, spsc_raw]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +41,7 @@ jobs:
         run: |
           cargo build --all --no-default-features --all-targets --verbose
           cargo test --all --no-default-features --all-targets --verbose
-          cargo clippy --all -- -D warnings
+          cargo clippy --all --no-default-features -- -D warnings
 
       - name: Build, test & clippy (alloc)
         if: matrix.profile == 'alloc'
@@ -55,7 +58,7 @@ jobs:
           cargo clippy --all --features std -- -D warnings
 
       - name: Build, test & clippy (spsc_raw)
-        if: matrix.profile == 'std'
+        if: matrix.profile == 'spsc_raw'
         run: |
           cargo build --all --features spsc_raw --all-targets --verbose
           cargo test  --all --features spsc_raw --all-targets --verbose
