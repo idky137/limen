@@ -248,12 +248,7 @@ where
         Tel: Telemetry + Sized,
     {
         if let Some((port, msg)) = self.src.try_produce() {
-            match ctx.out_try_push(port, msg) {
-                EnqueueResult::Enqueued => Ok(StepResult::MadeProgress),
-                EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
-                    Ok(StepResult::Backpressured)
-                }
-            }
+            ctx.push_output(port, msg)
         } else {
             Ok(StepResult::NoInput)
         }
@@ -337,13 +332,14 @@ where
 
         for _ in 0..batch_n {
             match self.src.try_produce() {
-                Some((port, msg)) => match ctx.out_try_push(port, msg) {
-                    EnqueueResult::Enqueued => {
+                Some((port, msg)) => match ctx.push_output(port, msg) {
+                    Ok(StepResult::MadeProgress) => {
                         made_progress = true;
                     }
-                    EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
+                    Ok(StepResult::Backpressured) | Err(_) => {
                         return Ok(StepResult::Backpressured);
                     }
+                    Ok(_) => {}
                 },
                 None => {
                     break;
