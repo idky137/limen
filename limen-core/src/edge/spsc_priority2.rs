@@ -334,16 +334,34 @@ mod tests {
             q.try_push(t1, &small_caps_policy, &mgr),
             EnqueueResult::Enqueued
         );
-        // With DropOldest and soft_items=1, pushing 2nd item evicts oldest in hi lane.
-        let res = q.try_push(t2, &small_caps_policy, &mgr);
-        assert_eq!(res, EnqueueResult::Evicted(t1));
-
-        // Only the newest (tick=2) should remain.
-        let popped = q.try_pop(&mgr).expect("pop");
+        // At soft threshold (1 item, soft=1) but not at hard cap (max=2).
+        // try_push does NOT evict internally — returns Enqueued.
         assert_eq!(
-            *mgr.peek_header(popped).unwrap().creation_tick(),
-            Ticks::new(2)
+            q.try_push(t2, &small_caps_policy, &mgr),
+            EnqueueResult::Enqueued
         );
+
+        // Queue full (2 items). Next push is Rejected without pre-eviction.
+        let t3 = store(&mut mgr, make_msg(3, QoSClass::LatencyCritical));
+        assert_eq!(
+            q.try_push(t3, &small_caps_policy, &mgr),
+            EnqueueResult::Rejected
+        );
+
+        // Pre-evict oldest (t1), then push t3 succeeds.
+        let evicted = q.try_pop(&mgr).expect("pre-evict");
+        assert_eq!(evicted, t1);
+        let _ = mgr.free(evicted);
+        assert_eq!(
+            q.try_push(t3, &small_caps_policy, &mgr),
+            EnqueueResult::Enqueued
+        );
+
+        // t2 and t3 remain; t1 was evicted.
+        let p1 = q.try_pop(&mgr).expect("pop t2");
+        assert_eq!(*mgr.peek_header(p1).unwrap().creation_tick(), Ticks::new(2));
+        let p2 = q.try_pop(&mgr).expect("pop t3");
+        assert_eq!(*mgr.peek_header(p2).unwrap().creation_tick(), Ticks::new(3));
         assert!(q.is_empty());
     }
 

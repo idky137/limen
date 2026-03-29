@@ -153,70 +153,16 @@ impl Edge for SpscAtomicRing {
             AdmissionDecision::DropNewest => EnqueueResult::DroppedNewest,
             AdmissionDecision::Reject => EnqueueResult::Rejected,
             AdmissionDecision::Block => EnqueueResult::Rejected,
-            AdmissionDecision::Evict(n) => {
-                let mut last_evicted = MessageToken::INVALID;
-                for _ in 0..n {
-                    if self.len() == 0 {
-                        break;
-                    }
-                    let ev = self.pop_raw();
-                    let ev_bytes = headers
-                        .peek_header(ev)
-                        .map(|h| *h.payload_size_bytes())
-                        .unwrap_or(0);
-                    self.bytes_in_queue.fetch_sub(ev_bytes, Ordering::AcqRel);
-                    last_evicted = ev;
-                }
-
+            AdmissionDecision::Evict(_) | AdmissionDecision::EvictUntilBelowHard => {
+                // Eviction is the caller's responsibility.
                 let items = self.len();
                 let bytes = self.bytes_in_queue.load(Ordering::Acquire);
                 if self.is_full() || policy.caps.at_or_above_hard(items, bytes) {
                     return EnqueueResult::Rejected;
                 }
-
                 self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
                 self.push_raw(token);
-
-                if last_evicted.is_invalid() {
-                    EnqueueResult::Enqueued
-                } else {
-                    EnqueueResult::Evicted(last_evicted)
-                }
-            }
-            AdmissionDecision::EvictUntilBelowHard => {
-                let mut last_evicted = MessageToken::INVALID;
-                while policy
-                    .caps
-                    .at_or_above_hard(self.len(), self.bytes_in_queue.load(Ordering::Acquire))
-                    && self.len() > 0
-                {
-                    let ev = self.pop_raw();
-                    let ev_bytes = headers
-                        .peek_header(ev)
-                        .map(|h| *h.payload_size_bytes())
-                        .unwrap_or(0);
-                    self.bytes_in_queue.fetch_sub(ev_bytes, Ordering::AcqRel);
-                    last_evicted = ev;
-                }
-
-                if policy.caps.at_or_above_hard(0, item_bytes) {
-                    return EnqueueResult::Rejected;
-                }
-
-                let items = self.len();
-                let bytes = self.bytes_in_queue.load(Ordering::Acquire);
-                if self.is_full() || policy.caps.at_or_above_hard(items, bytes) {
-                    return EnqueueResult::Rejected;
-                }
-
-                self.bytes_in_queue.fetch_add(item_bytes, Ordering::AcqRel);
-                self.push_raw(token);
-
-                if last_evicted.is_invalid() {
-                    EnqueueResult::Enqueued
-                } else {
-                    EnqueueResult::Evicted(last_evicted)
-                }
+                EnqueueResult::Enqueued
             }
         }
     }

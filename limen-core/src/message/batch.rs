@@ -13,9 +13,9 @@
 
 use crate::{
     memory::BufferDescriptor,
-    message::{payload::Payload, AdmissionInfo, Message, MessageHeader},
+    message::{payload::Payload, Message, MessageHeader},
     prelude::MemoryManager,
-    types::{DeadlineNs, MessageToken, QoSClass},
+    types::MessageToken,
 };
 
 use core::{mem, slice};
@@ -350,64 +350,6 @@ impl<'a, P: Payload> Payload for &'a BatchView<'a, Message<P>> {
     #[inline]
     fn buffer_descriptor(&self) -> BufferDescriptor {
         (*self).buffer_descriptor()
-    }
-}
-
-impl<'a, P: Payload> AdmissionInfo for BatchView<'a, Message<P>> {
-    #[inline]
-    fn item_bytes(&self) -> usize {
-        // Use the BatchView's Payload impl which sums header+payload sizes.
-        let desc = self.buffer_descriptor();
-        *desc.bytes()
-    }
-
-    #[inline]
-    fn deadline(&self) -> Option<DeadlineNs> {
-        // Use the last message's deadline as the batch-level hint if present.
-        // If empty, return None.
-        let last_header_opt = match self {
-            #[cfg(feature = "alloc")]
-            BatchView::Owned(v) => v.last().map(|m| m.header()),
-            BatchView::Borrowed(buf, n) => {
-                if *n == 0 {
-                    None
-                } else {
-                    buf.get(*n - 1).map(|m| m.header())
-                }
-            }
-        };
-
-        last_header_opt.map(|h| *h.deadline_ns()).unwrap_or(None)
-    }
-
-    #[inline]
-    fn qos(&self) -> QoSClass {
-        // Compute the highest QoS across all messages in the batch.
-        // Default to BestEffort when the batch is empty.
-        let mut best = QoSClass::BestEffort;
-
-        match self {
-            #[cfg(feature = "alloc")]
-            BatchView::Owned(v) => {
-                for m in v.iter() {
-                    let q = *m.header().qos();
-                    // Choose the numerically/ordinarily higher QoS. Assumes QoSClass: PartialOrd + Copy.
-                    if q > best {
-                        best = q;
-                    }
-                }
-            }
-            BatchView::Borrowed(buf, n) => {
-                for m in &buf[..*n] {
-                    let q = *m.header().qos();
-                    if q > best {
-                        best = q;
-                    }
-                }
-            }
-        }
-
-        best
     }
 }
 

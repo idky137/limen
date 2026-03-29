@@ -23,7 +23,7 @@ use crate::errors::NodeError;
 use crate::errors::QueueError;
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
-use crate::node::{Node, NodeCapabilities, NodeKind, OutStepContext, StepContext, StepResult};
+use crate::node::{Node, NodeCapabilities, NodeKind, ProcessResult, StepContext, StepResult};
 use crate::policy::{BatchingPolicy, EdgePolicy, NodePolicy};
 use crate::prelude::{
     BatchView, EdgeDescriptor, HeaderStore, MemoryManager, PlatformClock, Telemetry,
@@ -219,26 +219,18 @@ where
     }
 
     #[inline]
-    fn process_message<'graph, 'clock, OutQ, OutM, C, Tel>(
+    fn process_message<C>(
         &mut self,
         _msg: &Message<()>,
-        out_ctx: &mut OutStepContext<'graph, '_, 'clock, OUT, OutP, OutQ, OutM, C, Tel>,
-    ) -> Result<StepResult, NodeError>
+        _sys_clock: &C,
+    ) -> Result<ProcessResult<OutP>, NodeError>
     where
-        OutQ: Edge,
-        OutM: MemoryManager<OutP>,
         C: PlatformClock + Sized,
-        Tel: Telemetry + Sized,
     {
-        if let Some((port, msg)) = self.src.try_produce() {
-            match out_ctx.out_try_push(port, msg) {
-                EnqueueResult::Enqueued | EnqueueResult::Evicted(_) => Ok(StepResult::MadeProgress),
-                EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
-                    Ok(StepResult::Backpressured)
-                }
-            }
+        if let Some((_port, msg)) = self.src.try_produce() {
+            Ok(ProcessResult::Output(msg))
         } else {
-            Ok(StepResult::NoInput)
+            Err(NodeError::no_input())
         }
     }
 
@@ -257,7 +249,7 @@ where
     {
         if let Some((port, msg)) = self.src.try_produce() {
             match ctx.out_try_push(port, msg) {
-                EnqueueResult::Enqueued | EnqueueResult::Evicted(_) => Ok(StepResult::MadeProgress),
+                EnqueueResult::Enqueued => Ok(StepResult::MadeProgress),
                 EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
                     Ok(StepResult::Backpressured)
                 }
@@ -346,7 +338,7 @@ where
         for _ in 0..batch_n {
             match self.src.try_produce() {
                 Some((port, msg)) => match ctx.out_try_push(port, msg) {
-                    EnqueueResult::Enqueued | EnqueueResult::Evicted(_) => {
+                    EnqueueResult::Enqueued => {
                         made_progress = true;
                     }
                     EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {

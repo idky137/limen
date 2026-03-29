@@ -15,7 +15,9 @@ use crate::edge::{Edge, EdgeOccupancy, EnqueueResult};
 use crate::errors::{NodeError, QueueError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
-use crate::policy::{BatchingPolicy, EdgePolicy, NodePolicy, SlidingWindow, WindowKind};
+use crate::policy::{
+    AdmissionDecision, BatchingPolicy, EdgePolicy, NodePolicy, SlidingWindow, WindowKind,
+};
 use crate::prelude::{BatchMessageIter, MemoryManager, PlatformClock, TelemetryKey, TelemetryKind};
 use crate::telemetry::Telemetry;
 use crate::types::Ticks;
@@ -103,6 +105,22 @@ pub enum StepResult {
     YieldUntil(Ticks),
     /// Node has completed and will not produce further outputs.
     Terminal,
+}
+
+/// Result of processing a single input message.
+///
+/// Returned by [`Node::process_message`] to indicate what the node produced.
+/// The framework handles pushing to output edges; the node never interacts
+/// with queues or managers directly.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum ProcessResult<P: Payload> {
+    /// Processed the message and produced output to push to port 0.
+    Output(Message<P>),
+    /// Consumed the input but produced no output (sinks, filters).
+    Consumed,
+    /// Nothing to process / skip.
+    Skip,
 }
 
 /// A context provided to nodes during `step`, abstracting queues, managers,
@@ -257,20 +275,11 @@ where
     // Callback-based input operations
     // ---------------------------------------------------------------
 
-    /// Pop one message from input `port`, call `f` with a shared reference
-    /// to it and an output context, then free the manager slot after `f` returns.
-    ///
-    /// Maps queue errors to `StepResult`/`NodeError`:
-    /// - `Empty` → `Ok(StepResult::NoInput)`
-    /// - `Backpressured`/`HardCap` → `Err(NodeError::backpressured())`
-    /// - `Poisoned`/`Unsupported` → `Err(NodeError::execution_failed())`
-    #[inline]
+    /// Pop one message from input `port`, call `f` with a shared reference,
+    /// then push any output and free the manager slot.
     pub fn pop_and_process<F>(&mut self, port: usize, f: F) -> Result<StepResult, NodeError>
     where
-        F: FnOnce(
-            &Message<InP>,
-            &mut OutStepContext<'graph, '_, 'clock, OUT, OutP, OutQ, OutM, C, T>,
-        ) -> Result<StepResult, NodeError>,
+        F: FnOnce(&Message<InP>) -> Result<ProcessResult<OutP>, NodeError>,
     {
         debug_assert!(port < IN);
 
@@ -289,27 +298,7 @@ where
             .read(token)
             .map_err(|_| NodeError::execution_failed())?;
 
-        // Disjoint field split — output fields + telemetry.
-        let out_policies = self.out_policies;
-        let out_edge_ids = self.out_edge_ids;
-        let node_id = self.node_id;
-        let clock = self.clock;
-        let telemetry: &mut T = &mut *self.telemetry;
-        let outputs = &mut self.outputs;
-        let out_managers = &mut self.out_managers;
-
-        let mut out = OutStepContext {
-            outputs,
-            out_managers,
-            out_policies,
-            out_edge_ids,
-            node_id,
-            clock,
-            telemetry,
-            _marker: core::marker::PhantomData,
-        };
-
-        let result = f(&*guard, &mut out)?;
+        let result = f(&*guard)?;
 
         drop(guard);
         let _ = self.in_managers[port].free(token);
@@ -322,32 +311,25 @@ where
             let _ = self.in_occupancy(port);
         }
 
-        Ok(result)
+        match result {
+            ProcessResult::Output(out_msg) => self.push_output(0, out_msg),
+            ProcessResult::Consumed => Ok(StepResult::MadeProgress),
+            ProcessResult::Skip => Ok(StepResult::NoInput),
+        }
     }
 
     /// Pop a batch from input `port`. Set batch flags on popped tokens.
-    /// Call `f` with a lazy message iterator and an output context.
-    /// After `f` returns, free all popped tokens (first `stride` items).
-    ///
-    /// The callback receives a `BatchMessageIter` that yields `ReadGuard`s
-    /// lazily — no upfront copy. Nodes can iterate one-at-a-time or collect
-    /// into a scratch buffer for batch inference.
-    ///
-    /// For sliding-window batches, only the first `stride` tokens are freed;
-    /// the rest were peeked and remain in the edge.
-    #[inline]
+    /// Call `f` for each message in the batch, pushing any outputs internally.
+    /// After processing, free all consumed tokens.
     pub fn pop_batch_and_process<F>(
         &mut self,
         port: usize,
         nmax: usize,
         node_policy: &NodePolicy,
-        f: F,
+        mut f: F,
     ) -> Result<StepResult, NodeError>
     where
-        F: FnOnce(
-            BatchMessageIter<'_, '_, InP, InM>,
-            &mut OutStepContext<'graph, '_, 'clock, OUT, OutP, OutQ, OutM, C, T>,
-        ) -> Result<StepResult, NodeError>,
+        F: FnMut(&Message<InP>) -> Result<ProcessResult<OutP>, NodeError>,
     {
         debug_assert!(port < IN);
 
@@ -359,12 +341,15 @@ where
         let requested_policy = {
             let nb = *node_policy.batching();
             BatchingPolicy::with_window(
-                nb.fixed_n().map(|f| core::cmp::min(f, nmax)),
+                nb.fixed_n().map(|f_n| core::cmp::min(f_n, nmax)),
                 *nb.max_delta_t(),
                 match nb.window_kind() {
                     WindowKind::Disjoint => WindowKind::Disjoint,
                     WindowKind::Sliding(sw) => {
-                        let size = nb.fixed_n().map(|f| core::cmp::min(f, nmax)).unwrap_or(1);
+                        let size = nb
+                            .fixed_n()
+                            .map(|f_n| core::cmp::min(f_n, nmax))
+                            .unwrap_or(1);
                         let stride = core::cmp::min(*sw.stride(), size);
                         WindowKind::Sliding(SlidingWindow::new(stride))
                     }
@@ -374,11 +359,11 @@ where
 
         // Determine stride for free decisions.
         let stride = match requested_policy.window_kind() {
-            WindowKind::Disjoint => usize::MAX, // free all
+            WindowKind::Disjoint => usize::MAX,
             WindowKind::Sliding(sw) => *sw.stride(),
         };
 
-        // Sample pre-pop occupancy before the batch borrows inputs[port].
+        // Sample pre-pop occupancy.
         let occ_before = self.inputs[port].occupancy(&self.in_policies[port]);
 
         // Pop batch of tokens.
@@ -403,10 +388,10 @@ where
         }
         let actual_stride = core::cmp::min(stride, batch_len);
 
-        // Disjoint field split.
+        // Disjoint field split for input manager.
         let in_mgr: &mut InM = &mut *self.in_managers[port];
 
-        // Phase 1: set batch boundary flags on popped tokens (WriteGuard, short-lived).
+        // Phase 1: set batch boundary flags on popped tokens.
         for (idx, &token) in batch.as_slice().iter().enumerate() {
             if idx < actual_stride {
                 if let Ok(mut wg) = in_mgr.read_mut(token) {
@@ -417,12 +402,11 @@ where
                         wg.header_mut().set_last_in_batch();
                     }
                 }
-                // WriteGuard drops here — mutable borrow released per iteration.
             }
         }
 
-        // Phase 2: build iterator (shared ReadGuards) + OutStepContext, call callback.
-        // All WriteGuards are dropped, so shared borrows are safe.
+        // Phase 2: build OutStepContext for disjoint output access, then
+        // iterate batch calling process_message per item.
         let iter =
             BatchMessageIter::new(batch.as_slice().iter(), &*in_mgr, actual_stride, batch_len);
 
@@ -445,9 +429,38 @@ where
             _marker: core::marker::PhantomData,
         };
 
-        let result = f(iter, &mut out)?;
+        let mut any_made = false;
+        let mut backpressured = false;
+        for guard in iter {
+            if backpressured {
+                // Once backpressured, skip remaining messages but keep iterating
+                // to drop the iterator cleanly.
+                drop(guard);
+                continue;
+            }
+            match f(&*guard)? {
+                ProcessResult::Output(out_msg) => {
+                    drop(guard);
+                    match out.out_try_push(0, out_msg) {
+                        EnqueueResult::Enqueued => {
+                            any_made = true;
+                        }
+                        EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
+                            backpressured = true;
+                        }
+                    }
+                }
+                ProcessResult::Consumed => {
+                    drop(guard);
+                    any_made = true;
+                }
+                ProcessResult::Skip => {
+                    drop(guard);
+                }
+            }
+        }
 
-        // Phase 3: free popped tokens (iterator + guards dropped, mutable borrow available).
+        // Phase 3: free consumed tokens.
         for (idx, &token) in batch.as_slice().iter().enumerate() {
             if idx < actual_stride {
                 let _ = in_mgr.free(token);
@@ -468,7 +481,13 @@ where
             );
         }
 
-        Ok(result)
+        if backpressured {
+            Ok(StepResult::Backpressured)
+        } else if any_made {
+            Ok(StepResult::MadeProgress)
+        } else {
+            Ok(StepResult::NoInput)
+        }
     }
 
     /// Return a snapshot of occupancy of the specified input queue.
@@ -501,20 +520,66 @@ where
     /// Stores the message in the output memory manager, then pushes the
     /// resulting token to the edge. Handles eviction: if DropOldest evicts
     /// a token, the evicted token is freed from the manager.
-    #[inline]
     pub fn out_try_push(&mut self, o: usize, m: Message<OutP>) -> EnqueueResult {
         debug_assert!(o < OUT);
 
-        // Store message in output manager → get token
         let token = match self.out_managers[o].store(m) {
             Ok(t) => t,
-            Err(_) => return EnqueueResult::Rejected, // No free slots
+            Err(_) => return EnqueueResult::Rejected,
         };
 
-        // Push token to output edge
-        let res = self.outputs[o].try_push(token, &self.out_policies[o], &*self.out_managers[o]);
+        // Pre-eviction: query admission and pop+free any tokens that must make room.
+        let decision = self.outputs[o].get_admission_decision(
+            &self.out_policies[o],
+            token,
+            &*self.out_managers[o],
+        );
+        match decision {
+            AdmissionDecision::Evict(n) => {
+                for _ in 0..n {
+                    match self.outputs[o].try_pop(&*self.out_managers[o]) {
+                        Ok(evicted) => {
+                            let _ = self.out_managers[o].free(evicted);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            AdmissionDecision::EvictUntilBelowHard => loop {
+                let occ = self.outputs[o].occupancy(&self.out_policies[o]);
+                if !self.out_policies[o]
+                    .caps
+                    .at_or_above_hard(*occ.items(), *occ.bytes())
+                {
+                    break;
+                }
+                match self.outputs[o].try_pop(&*self.out_managers[o]) {
+                    Ok(evicted) => {
+                        let _ = self.out_managers[o].free(evicted);
+                    }
+                    Err(_) => break,
+                }
+            },
+            AdmissionDecision::DropNewest => {
+                let _ = self.out_managers[o].free(token);
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
+                return EnqueueResult::DroppedNewest;
+            }
+            AdmissionDecision::Reject | AdmissionDecision::Block => {
+                let _ = self.out_managers[o].free(token);
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
+                return EnqueueResult::Rejected;
+            }
+            AdmissionDecision::Admit => {}
+        }
 
-        match res {
+        match self.outputs[o].try_push(token, &self.out_policies[o], &*self.out_managers[o]) {
             EnqueueResult::Enqueued => {
                 if T::METRICS_ENABLED {
                     self.telemetry.incr_counter(
@@ -525,16 +590,7 @@ where
                 }
                 EnqueueResult::Enqueued
             }
-            EnqueueResult::DroppedNewest => {
-                // New message was dropped — free its token from manager
-                let _ = self.out_managers[o].free(token);
-                if T::METRICS_ENABLED {
-                    self.telemetry
-                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
-                }
-                EnqueueResult::DroppedNewest
-            }
-            EnqueueResult::Rejected => {
+            EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
                 let _ = self.out_managers[o].free(token);
                 if T::METRICS_ENABLED {
                     self.telemetry
@@ -542,18 +598,94 @@ where
                 }
                 EnqueueResult::Rejected
             }
-            EnqueueResult::Evicted(evicted_token) => {
-                // An older message was evicted — free the evicted token
-                let _ = self.out_managers[o].free(evicted_token);
+        }
+    }
+
+    /// Push an output message to the specified output port and map the result
+    /// to a `StepResult`.
+    ///
+    /// Stores the message in the output memory manager, performs pre-eviction
+    /// (popping and freeing all slots the admission policy requires), then
+    /// pushes the token to the edge. Residual eviction from a concurrent race
+    /// is also freed. This guarantees zero manager slot leaks across all edge
+    /// tiers and admission policies.
+    pub fn push_output(
+        &mut self,
+        port: usize,
+        msg: Message<OutP>,
+    ) -> Result<StepResult, NodeError> {
+        debug_assert!(port < OUT);
+
+        // Store message first so the token's header is available for admission
+        // decisions.
+        let token = self.out_managers[port]
+            .store(msg)
+            .map_err(|_| NodeError::execution_failed())?;
+
+        // Pre-eviction: check what the policy requires and pop+free ALL
+        // tokens that need to be evicted before the push. This prevents
+        // manager slot leaks when Evict(n > 1) or EvictUntilBelowHard fires.
+        let decision = self.outputs[port].get_admission_decision(
+            &self.out_policies[port],
+            token,
+            &*self.out_managers[port],
+        );
+        match decision {
+            AdmissionDecision::Evict(n) => {
+                for _ in 0..n {
+                    match self.outputs[port].try_pop(&*self.out_managers[port]) {
+                        Ok(evicted) => {
+                            let _ = self.out_managers[port].free(evicted);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            AdmissionDecision::EvictUntilBelowHard => loop {
+                let occ = self.outputs[port].occupancy(&self.out_policies[port]);
+                if !self.out_policies[port]
+                    .caps
+                    .at_or_above_hard(*occ.items(), *occ.bytes())
+                {
+                    break;
+                }
+                match self.outputs[port].try_pop(&*self.out_managers[port]) {
+                    Ok(evicted) => {
+                        let _ = self.out_managers[port].free(evicted);
+                    }
+                    Err(_) => break,
+                }
+            },
+            AdmissionDecision::DropNewest
+            | AdmissionDecision::Reject
+            | AdmissionDecision::Block => {
+                // Not admitted — free the stored token and signal backpressure.
+                let _ = self.out_managers[port].free(token);
+                return Ok(StepResult::Backpressured);
+            }
+            AdmissionDecision::Admit => {}
+        }
+
+        // After pre-eviction the edge should Admit. Push and handle any
+        // residual (e.g. concurrent race on a future ConcurrentEdge).
+        match self.outputs[port].try_push(
+            token,
+            &self.out_policies[port],
+            &*self.out_managers[port],
+        ) {
+            EnqueueResult::Enqueued => {
                 if T::METRICS_ENABLED {
                     self.telemetry.incr_counter(
                         TelemetryKey::node(self.node_id, TelemetryKind::EgressMsgs),
                         1,
                     );
-                    let _ = self.out_occupancy(o);
+                    let _ = self.out_occupancy(port);
                 }
-                // The new message was enqueued (eviction made room)
-                EnqueueResult::Enqueued
+                Ok(StepResult::MadeProgress)
+            }
+            EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
+                let _ = self.out_managers[port].free(token);
+                Ok(StepResult::Backpressured)
             }
         }
     }
@@ -743,7 +875,6 @@ where
     ///
     /// Stores the message in the manager, pushes the token to the edge,
     /// and handles eviction (frees evicted tokens from the manager).
-    #[inline]
     pub fn out_try_push(&mut self, o: usize, m: Message<OutP>) -> EnqueueResult {
         debug_assert!(o < OUT);
 
@@ -752,9 +883,58 @@ where
             Err(_) => return EnqueueResult::Rejected,
         };
 
-        let res = self.outputs[o].try_push(token, &self.out_policies[o], &*self.out_managers[o]);
+        // Pre-eviction: query admission and pop+free any tokens that must make room.
+        let decision = self.outputs[o].get_admission_decision(
+            &self.out_policies[o],
+            token,
+            &*self.out_managers[o],
+        );
+        match decision {
+            AdmissionDecision::Evict(n) => {
+                for _ in 0..n {
+                    match self.outputs[o].try_pop(&*self.out_managers[o]) {
+                        Ok(evicted) => {
+                            let _ = self.out_managers[o].free(evicted);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            AdmissionDecision::EvictUntilBelowHard => loop {
+                let occ = self.outputs[o].occupancy(&self.out_policies[o]);
+                if !self.out_policies[o]
+                    .caps
+                    .at_or_above_hard(*occ.items(), *occ.bytes())
+                {
+                    break;
+                }
+                match self.outputs[o].try_pop(&*self.out_managers[o]) {
+                    Ok(evicted) => {
+                        let _ = self.out_managers[o].free(evicted);
+                    }
+                    Err(_) => break,
+                }
+            },
+            AdmissionDecision::DropNewest => {
+                let _ = self.out_managers[o].free(token);
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
+                return EnqueueResult::DroppedNewest;
+            }
+            AdmissionDecision::Reject | AdmissionDecision::Block => {
+                let _ = self.out_managers[o].free(token);
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
+                return EnqueueResult::Rejected;
+            }
+            AdmissionDecision::Admit => {}
+        }
 
-        match res {
+        match self.outputs[o].try_push(token, &self.out_policies[o], &*self.out_managers[o]) {
             EnqueueResult::Enqueued => {
                 if T::METRICS_ENABLED {
                     self.telemetry.incr_counter(
@@ -769,36 +949,13 @@ where
                 }
                 EnqueueResult::Enqueued
             }
-            EnqueueResult::DroppedNewest => {
-                let _ = self.out_managers[o].free(token);
-                if T::METRICS_ENABLED {
-                    self.telemetry
-                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
-                }
-                EnqueueResult::DroppedNewest
-            }
-            EnqueueResult::Rejected => {
+            EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
                 let _ = self.out_managers[o].free(token);
                 if T::METRICS_ENABLED {
                     self.telemetry
                         .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
                 }
                 EnqueueResult::Rejected
-            }
-            EnqueueResult::Evicted(evicted_token) => {
-                let _ = self.out_managers[o].free(evicted_token);
-                if T::METRICS_ENABLED {
-                    self.telemetry.incr_counter(
-                        TelemetryKey::node(self.node_id, TelemetryKind::EgressMsgs),
-                        1,
-                    );
-                    let occ = self.outputs[o].occupancy(&self.out_policies[o]);
-                    self.telemetry.set_gauge(
-                        TelemetryKey::edge(self.out_edge_ids[o], TelemetryKind::QueueDepth),
-                        *occ.items() as u64,
-                    );
-                }
-                EnqueueResult::Enqueued
             }
         }
     }
@@ -906,21 +1063,17 @@ where
 
     /// Per-message processing hook.
     ///
-    /// Note: we intentionally use an *anonymous* borrow `'_` for the second
-    /// lifetime parameter of OutStepContext. This ensures each call to
-    /// `process_message(..., &mut out)` creates a *fresh* short-lived mutable
-    /// borrow of `out`, allowing repeated re-borrows inside a loop over a
-    /// batch.
-    fn process_message<'graph, 'clock, OutQ, OutM, C, Tel>(
+    /// Receives a shared reference to the input message and returns a
+    /// `ProcessResult` indicating what output (if any) was produced.
+    /// The framework handles pushing outputs to edges; the node never
+    /// interacts with queues or managers directly.
+    fn process_message<C>(
         &mut self,
         msg: &Message<InP>,
-        out_ctx: &mut OutStepContext<'graph, '_, 'clock, OUT, OutP, OutQ, OutM, C, Tel>,
-    ) -> Result<StepResult, NodeError>
+        sys_clock: &C,
+    ) -> Result<ProcessResult<OutP>, NodeError>
     where
-        OutQ: Edge,
-        OutM: MemoryManager<OutP>,
-        C: PlatformClock + Sized,
-        Tel: Telemetry + Sized;
+        C: PlatformClock + Sized;
 
     /// Execute one cooperative step using the provided context.
     ///
@@ -960,20 +1113,12 @@ where
             None => return Ok(StepResult::NoInput),
         };
 
-        ctx.pop_and_process(port, |msg, out| self.process_message(msg, out))
+        ctx.pop_and_process(port, |msg| self.process_message(msg, ctx.clock))
     }
 
     /// Default batched-step implementation that honors all NodePolicy batching
     /// variants while delegating actual consumption to the implementor's
     /// single-message `process_message()` method.
-    ///
-    /// The callback receives a `BatchMessageIter` and iterates each message,
-    /// calling `process_message` per item. Nodes that need all inputs
-    /// simultaneously (e.g. `InferenceModel`) should override this method
-    /// and collect from the iterator into a scratch buffer.
-    ///
-    /// Batch boundary flags (`first_in_batch`, `last_in_batch`) are set on
-    /// popped tokens before the callback is invoked.
     fn step_batch<'graph, 'telemetry, 'clock, InQ, OutQ, InM, OutM, C, Tel>(
         &mut self,
         ctx: &mut StepContext<
@@ -1007,25 +1152,8 @@ where
         };
         let nmax = node_policy.batching().fixed_n().unwrap_or(1);
 
-        ctx.pop_batch_and_process(port, nmax, &node_policy, |iter, out| {
-            let mut any_made = false;
-            for guard in iter {
-                match self.process_message(&*guard, out)? {
-                    StepResult::MadeProgress => any_made = true,
-                    StepResult::NoInput => {}
-                    StepResult::Backpressured => return Ok(StepResult::Backpressured),
-                    StepResult::WaitingOnExternal => {
-                        return Ok(StepResult::WaitingOnExternal);
-                    }
-                    StepResult::YieldUntil(t) => return Ok(StepResult::YieldUntil(t)),
-                    StepResult::Terminal => return Ok(StepResult::Terminal),
-                }
-            }
-            if any_made {
-                Ok(StepResult::MadeProgress)
-            } else {
-                Ok(StepResult::NoInput)
-            }
+        ctx.pop_batch_and_process(port, nmax, &node_policy, |msg| {
+            self.process_message(msg, ctx.clock)
         })
     }
 
@@ -1917,7 +2045,6 @@ pub mod contract_tests {
                 crate::edge::EnqueueResult::Enqueued => continue,
                 crate::edge::EnqueueResult::DroppedNewest
                 | crate::edge::EnqueueResult::Rejected => break,
-                _ => break,
             }
         }
 

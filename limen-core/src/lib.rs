@@ -60,33 +60,75 @@ pub mod runtime;
 pub mod prelude;
 
 // **PR NOTES**:
-// - fix feature boundary (edges are confused)(default, alloc (untilises alloc), std (enables multithreading))
-
+//
+// ----------
+// 1.
+//
 // Phase 3d: Eviction design note
 //
 //  The current Evict(n) path can evict multiple tokens but EnqueueResult::Evicted only returns one. For v0.1.0, this is acceptable because:
 //  - Evict(n) with n>1 is rare (only EvictUntilBelowHard evicts multiple)
 //  - StepContext needs to free ALL evicted tokens, not just the last one
-//
 //  Better approach: StepContext should handle eviction pre-push (call get_admission_decision, pop evicted tokens itself, free them, then push). The edge's try_push would only handle Admit/DropNewest/Reject/Block. Eviction
-//   logic moves to StepContext.
 //
-//  For now, the implementation above returns the last evicted token. If multiple evictions are needed, StepContext can pre-check admission and handle eviction externally before calling try_push. This is a minor TODO for
-//  Phase 5 (StepContext).
+// ----------
+// 2.
 //
 // REMOVE ADMISSION INFO!!!
+//
+// ----------
+// 3.
 //
 // FINAL CLEANUP AT END OF PR:
 // - batch types
 // - tensor types
-// - extra message description trait
-// - check tests (memory manager contract tests?)
+// - extra message description trait ^^^ (Admission info or different???)
 //
-// Ensure concurrent runtime only accepts concurrent graph at compile time.
-// Only emit non-std graoh **or**std graph, not both!
+// ----------
+// 4.
 //
-// Limen - Node::porcess_message:
+// Ensure concurrent runtime only accepts concurrent safe graph at compile time.
 //
-// Fonce gives message and recieves message back!
+// ----------
+// 5.
 //
-// Node implementers don't have to worry about graph behaviour!
+// Node::pr0pcess_message:
+// - Fonce gives message and recieves message back!
+// - Node implementers don't have to worry about graph behaviour / wiring at all!
+//
+// ***FINAL***
+// - remove telemetryfrom node, purely internal!
+
+// please help me finish C1a, there is an old plan for this final work in: claude_context_docs/planned/C1a_final_cleanup_plan.md, however this is wrong:
+// - we are keeping outstepcontext, it it just not part of process message.
+//
+// For B still we need to:
+// - finish updating sink, source and model.
+// - update nodelink (keep telemetry in process_message as is, I need it.
+// - update bench node impls
+// - update contract tests
+//
+// then I have the following errors:
+// error[E0499]: cannot borrow `*ctx` as mutable more than once at a time
+//     --> limen-core/src/node.rs:1000:9
+//      |
+//  998 |         let telemetry = ctx.telemetry_mut();
+//      |                         --- first mutable borrow occurs here
+//  999 |
+// 1000 |         ctx.pop_and_process(port, |msg| self.process_message(msg, clock, telemetry))
+//      |         ^^^ second mutable borrow occurs here                            --------- first borrow later captured here by closure
+//
+// error[E0499]: cannot borrow `*ctx` as mutable more than once at a time
+//     --> limen-core/src/node.rs:1041:9
+//      |
+// 1039 |         let telemetry = ctx.telemetry_mut();
+//      |                         --- first mutable borrow occurs here
+// 1040 |
+// 1041 |         ctx.pop_batch_and_process(port, nmax, &node_policy, |msg| {
+//      |         ^^^ second mutable borrow occurs here
+// 1042 |             self.process_message(msg, clock telemetry)
+//      |                                             --------- first borrow later captured here by closure
+//
+// then C and D.
+//
+// please create a full plan to fix all of this.

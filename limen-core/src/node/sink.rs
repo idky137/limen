@@ -15,7 +15,7 @@ use crate::edge::{Edge, EdgeOccupancy};
 use crate::errors::NodeError;
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
-use crate::node::{Node, NodeCapabilities, NodeKind, OutStepContext, StepContext, StepResult};
+use crate::node::{Node, NodeCapabilities, NodeKind, ProcessResult, StepContext, StepResult};
 use crate::policy::NodePolicy;
 use crate::prelude::{MemoryManager, PlatformClock, Telemetry};
 
@@ -174,20 +174,17 @@ where
     }
 
     #[inline]
-    fn process_message<'graph, 'clock, OutQ, OutM, C, Tel>(
+    fn process_message<C>(
         &mut self,
         msg: &Message<InP>,
-        _out_ctx: &mut OutStepContext<'graph, '_, 'clock, 0, (), OutQ, OutM, C, Tel>,
-    ) -> Result<StepResult, NodeError>
+        _sys_clock: &C,
+    ) -> Result<ProcessResult<()>, NodeError>
     where
-        OutQ: Edge,
-        OutM: MemoryManager<()>,
         C: PlatformClock + Sized,
-        Tel: Telemetry + Sized,
     {
         self.sink
             .consume(msg)
-            .map(|_| StepResult::MadeProgress)
+            .map(|_| ProcessResult::Consumed)
             .map_err(|_| NodeError::execution_failed())
     }
 
@@ -211,10 +208,10 @@ where
             None => return Ok(StepResult::NoInput),
         };
 
-        cx.pop_and_process(port, |msg, _out| {
+        cx.pop_and_process(port, |msg| {
             self.sink
                 .consume(msg)
-                .map(|_| StepResult::MadeProgress)
+                .map(|_| ProcessResult::Consumed)
                 .map_err(|_| NodeError::execution_failed())
         })
     }
@@ -252,26 +249,10 @@ where
             None => return Ok(StepResult::NoInput),
         };
         let nmax = node_policy.batching().fixed_n().unwrap_or(1);
+        let clock = ctx.clock;
 
-        ctx.pop_batch_and_process(port, nmax, &node_policy, |iter, out| {
-            let mut any_made = false;
-            for guard in iter {
-                match self.process_message(&*guard, out)? {
-                    StepResult::MadeProgress => any_made = true,
-                    StepResult::NoInput => {}
-                    StepResult::Backpressured => return Ok(StepResult::Backpressured),
-                    StepResult::WaitingOnExternal => {
-                        return Ok(StepResult::WaitingOnExternal);
-                    }
-                    StepResult::YieldUntil(t) => return Ok(StepResult::YieldUntil(t)),
-                    StepResult::Terminal => return Ok(StepResult::Terminal),
-                }
-            }
-            if any_made {
-                Ok(StepResult::MadeProgress)
-            } else {
-                Ok(StepResult::NoInput)
-            }
+        ctx.pop_batch_and_process(port, nmax, &node_policy, |msg| {
+            self.process_message(msg, clock)
         })
     }
 

@@ -152,61 +152,14 @@ impl<const N: usize> Edge for TestSpscRingBuf<N> {
                 // Test queue cannot block; translate to Rejected.
                 EnqueueResult::Rejected
             }
-            AdmissionDecision::Evict(n) => {
-                let mut last_evicted = MessageToken::INVALID;
-                for _ in 0..n {
-                    if self.len == 0 {
-                        break;
-                    }
-                    let ev = self.pop_raw();
-                    let ev_bytes = headers
-                        .peek_header(ev)
-                        .map(|h| *h.payload_size_bytes())
-                        .unwrap_or(0);
-                    self.bytes = self.bytes.saturating_sub(ev_bytes);
-                    last_evicted = ev;
-                }
-
-                if policy.caps.at_or_above_hard(self.len, self.bytes) || self.is_full() {
-                    return EnqueueResult::Rejected;
-                }
-
-                self.bytes = self.bytes.saturating_add(item_bytes);
-                self.push_raw(token);
-
-                if last_evicted.is_invalid() {
-                    EnqueueResult::Enqueued
-                } else {
-                    EnqueueResult::Evicted(last_evicted)
-                }
-            }
-            AdmissionDecision::EvictUntilBelowHard => {
-                let mut last_evicted = MessageToken::INVALID;
-                while policy.caps.at_or_above_hard(self.len, self.bytes) && self.len > 0 {
-                    let ev = self.pop_raw();
-                    let ev_bytes = headers
-                        .peek_header(ev)
-                        .map(|h| *h.payload_size_bytes())
-                        .unwrap_or(0);
-                    self.bytes = self.bytes.saturating_sub(ev_bytes);
-                    last_evicted = ev;
-                }
-
-                if policy.caps.at_or_above_hard(0, item_bytes) {
-                    return EnqueueResult::Rejected;
-                }
+            AdmissionDecision::Evict(_) | AdmissionDecision::EvictUntilBelowHard => {
+                // Eviction is the caller's responsibility.
                 if self.is_full() || policy.caps.at_or_above_hard(self.len, self.bytes) {
                     return EnqueueResult::Rejected;
                 }
-
                 self.bytes = self.bytes.saturating_add(item_bytes);
                 self.push_raw(token);
-
-                if last_evicted.is_invalid() {
-                    EnqueueResult::Enqueued
-                } else {
-                    EnqueueResult::Evicted(last_evicted)
-                }
+                EnqueueResult::Enqueued
             }
         }
     }

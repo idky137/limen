@@ -33,9 +33,6 @@ pub enum EnqueueResult {
     DroppedNewest,
     /// Item could not be enqueued due to backpressure or full capacity.
     Rejected,
-    /// An older item was evicted (DropOldest). The evicted token is returned
-    /// so the caller can free it from the memory manager.
-    Evicted(MessageToken),
 }
 
 /// Queue occupancy snapshot used for decisions.
@@ -92,8 +89,9 @@ pub trait Edge {
     /// The implementation uses `headers` to look up the token's message header
     /// for admission decisions (byte size, QoS, deadline).
     ///
-    /// Returns [`EnqueueResult::Evicted`] if DropOldest evicted an item —
-    /// the caller is responsible for freeing the evicted token from the manager.
+    /// For `DropOldest` policies, the caller must pre-evict via
+    /// `get_admission_decision` + `try_pop` before calling `try_push`.
+    /// `try_push` itself never evicts.
     fn try_push<H: HeaderStore>(
         &mut self,
         token: MessageToken,
@@ -791,29 +789,37 @@ pub mod contract_tests {
             assert!(matches!(q.try_pop(&mgr), Err(QueueError::Empty)));
         }
 
-        // --- DropOldest: second push should evict oldest and succeed.
+        // --- DropOldest: try_push does NOT evict internally.
+        // Pushes succeed while below hard cap; at hard cap, Rejected.
+        // Caller must pre-evict (via try_pop) before retrying.
         {
             let mut q = make();
             let mut mgr: StaticMemoryManager<u32, MGR_DEPTH> = StaticMemoryManager::new();
             let policy = EdgePolicy::new(caps, AdmissionPolicy::DropOldest, OverBudgetAction::Drop);
+            // caps: max_items=3, soft_items=1
 
-            let a_msg = make_msg_u32(1);
-            let a_token = store(&mut mgr, a_msg);
+            // Fill to hard cap. All succeed despite being above soft (soft=1).
+            let a_token = store(&mut mgr, make_msg_u32(1));
+            let b_token = store(&mut mgr, make_msg_u32(2));
+            let c_token = store(&mut mgr, make_msg_u32(3));
             assert_eq!(q.try_push(a_token, &policy, &mgr), EnqueueResult::Enqueued);
+            assert_eq!(q.try_push(b_token, &policy, &mgr), EnqueueResult::Enqueued);
+            assert_eq!(q.try_push(c_token, &policy, &mgr), EnqueueResult::Enqueued);
 
-            let b_msg = make_msg_u32(2);
-            let b_token = store(&mut mgr, b_msg);
-            let res = q.try_push(b_token, &policy, &mgr);
-            // DropOldest evicts `a`, enqueues `b`, returns Evicted(a_token)
-            assert_eq!(res, EnqueueResult::Evicted(a_token));
+            // At hard cap: Rejected without pre-eviction.
+            let d_token = store(&mut mgr, make_msg_u32(4));
+            assert_eq!(q.try_push(d_token, &policy, &mgr), EnqueueResult::Rejected);
 
-            // The queue should now contain only `b` (oldest `a` evicted).
-            let peek_token = q.try_peek().expect("peek after drop-oldest");
-            assert_eq!(peek_token, b_token);
+            // Pre-evict oldest (a), then push succeeds.
+            let evicted = q.try_pop(&mgr).expect("pre-evict pop");
+            assert_eq!(evicted, a_token);
+            let _ = mgr.free(evicted);
+            assert_eq!(q.try_push(d_token, &policy, &mgr), EnqueueResult::Enqueued);
 
-            // drain and verify
-            let popped = q.try_pop(&mgr).expect("pop b");
-            assert_eq!(popped, b_token);
+            // Queue now has [b, c, d].
+            assert_eq!(q.try_pop(&mgr).expect("pop b"), b_token);
+            assert_eq!(q.try_pop(&mgr).expect("pop c"), c_token);
+            assert_eq!(q.try_pop(&mgr).expect("pop d"), d_token);
             assert!(matches!(q.try_pop(&mgr), Err(QueueError::Empty)));
         }
 

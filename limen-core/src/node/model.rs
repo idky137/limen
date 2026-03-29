@@ -14,11 +14,11 @@
 //! required by payload semantics or batch buffering.
 
 use crate::compute::{BackendCapabilities, ComputeBackend, ComputeModel, ModelMetadata};
-use crate::edge::{Edge, EnqueueResult};
+use crate::edge::Edge;
 use crate::errors::{InferenceError, NodeError};
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
-use crate::node::{Node, NodeCapabilities, NodeKind, OutStepContext, StepContext, StepResult};
+use crate::node::{Node, NodeCapabilities, NodeKind, ProcessResult, StepContext, StepResult};
 use crate::policy::NodePolicy;
 use crate::prelude::{MemoryManager, PlatformClock, Telemetry};
 
@@ -171,16 +171,13 @@ where
     }
 
     #[inline]
-    fn process_message<'graph, 'clock, OutQ, OutM, C, Tel>(
+    fn process_message<C>(
         &mut self,
         msg: &Message<InP>,
-        out_ctx: &mut OutStepContext<'graph, '_, 'clock, 1, OutP, OutQ, OutM, C, Tel>,
-    ) -> Result<StepResult, NodeError>
+        _sys_clock: &C,
+    ) -> Result<ProcessResult<OutP>, NodeError>
     where
-        OutQ: Edge,
-        OutM: MemoryManager<OutP>,
         C: PlatformClock + Sized,
-        Tel: Telemetry + Sized,
     {
         // Run single-item inference into the reusable scratch output.
         let inp: &InP = msg.payload();
@@ -188,17 +185,11 @@ where
             .infer_one(inp, &mut self.scratch_out)
             .map_err(map_inference_err)?;
 
-        // Build output message reusing header from input (clone the header).
+        // Build output message reusing header from input.
         let hdr = *msg.header();
         let out_msg = Message::new(hdr, core::mem::take(&mut self.scratch_out));
 
-        // Push to output 0 and map enqueue result to StepResult.
-        match out_ctx.out_try_push(0, out_msg) {
-            EnqueueResult::Enqueued | EnqueueResult::DroppedNewest | EnqueueResult::Evicted(_) => {
-                Ok(StepResult::MadeProgress)
-            }
-            EnqueueResult::Rejected => Ok(StepResult::Backpressured),
-        }
+        Ok(ProcessResult::Output(out_msg))
     }
 
     #[inline]
@@ -214,7 +205,7 @@ where
         C: PlatformClock + Sized,
         Tel: Telemetry + Sized,
     {
-        ctx.pop_and_process(0, |msg, out| self.process_message(msg, out))
+        ctx.pop_and_process(0, |msg| self.process_message(msg, ctx.clock))
     }
 
     #[inline]
@@ -239,27 +230,10 @@ where
         }
 
         let node_policy = self.node_policy;
-        ctx.pop_batch_and_process(0, nmax, &node_policy, |iter, out| {
-            // Iterate the batch, calling process_message per item.
-            // process_message already handles infer_one + push to output.
-            let mut any_made = false;
-            for guard in iter {
-                match self.process_message(&*guard, out)? {
-                    StepResult::MadeProgress => any_made = true,
-                    StepResult::NoInput => {}
-                    StepResult::Backpressured => return Ok(StepResult::Backpressured),
-                    StepResult::WaitingOnExternal => {
-                        return Ok(StepResult::WaitingOnExternal);
-                    }
-                    StepResult::YieldUntil(t) => return Ok(StepResult::YieldUntil(t)),
-                    StepResult::Terminal => return Ok(StepResult::Terminal),
-                }
-            }
-            if any_made {
-                Ok(StepResult::MadeProgress)
-            } else {
-                Ok(StepResult::NoInput)
-            }
+        let clock = ctx.clock;
+
+        ctx.pop_batch_and_process(0, nmax, &node_policy, |msg| {
+            self.process_message(msg, clock)
         })
     }
 

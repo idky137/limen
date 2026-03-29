@@ -8,8 +8,8 @@ pub use crate::graph::{validate::*, *};
 pub use crate::memory::{header_store::*, manager::*, static_manager::*, *};
 pub use crate::message::{batch::*, payload::*, tensor::*, *};
 pub use crate::node::{
-    link::*, model::*, sink::*, source::*, Node, NodeCapabilities, NodeKind, StepContext,
-    StepResult,
+    link::*, model::*, sink::*, source::*, Node, NodeCapabilities, NodeKind, ProcessResult,
+    StepContext, StepResult,
 };
 pub use crate::platform::{linux::*, *};
 pub use crate::policy::*;

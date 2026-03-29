@@ -228,84 +228,24 @@ impl Edge for HeapRing {
                 self.push_raw(token);
                 EnqueueResult::Enqueued
             }
-
             AdmissionDecision::DropNewest => EnqueueResult::DroppedNewest,
-
             AdmissionDecision::Reject => EnqueueResult::Rejected,
-
             AdmissionDecision::Block => {
                 // This P1 heap ring cannot block in this design; translate to Rejected.
                 EnqueueResult::Rejected
             }
-
-            AdmissionDecision::Evict(n) => {
-                // Evict up to n oldest tokens; record last evicted.
-                let mut last_evicted = MessageToken::INVALID;
-                for _ in 0..n {
-                    if self.len == 0 {
-                        break;
-                    }
-                    let ev = self.pop_raw();
-                    let ev_bytes = headers
-                        .peek_header(ev)
-                        .map(|h| *h.payload_size_bytes())
-                        .unwrap_or(0);
-                    self.bytes = self.bytes.saturating_sub(ev_bytes);
-                    last_evicted = ev;
-                }
-
-                // After eviction, ensure we can accept the item.
+            AdmissionDecision::Evict(_) | AdmissionDecision::EvictUntilBelowHard => {
+                // Eviction is the caller's responsibility (see push_output /
+                // out_try_push). Push if physically possible.
                 if self.is_full() || policy.caps.at_or_above_hard(self.len(), self.bytes) {
                     return EnqueueResult::Rejected;
                 }
-
                 if self.cap.is_none() {
                     self.ensure_capacity_for_push();
                 }
-
                 self.bytes = self.bytes.saturating_add(item_bytes);
                 self.push_raw(token);
-
-                if last_evicted.is_invalid() {
-                    EnqueueResult::Enqueued
-                } else {
-                    EnqueueResult::Evicted(last_evicted)
-                }
-            }
-
-            AdmissionDecision::EvictUntilBelowHard => {
-                let mut last_evicted = MessageToken::INVALID;
-                while policy.caps.at_or_above_hard(self.len(), self.bytes) && self.len > 0 {
-                    let ev = self.pop_raw();
-                    let ev_bytes = headers
-                        .peek_header(ev)
-                        .map(|h| *h.payload_size_bytes())
-                        .unwrap_or(0);
-                    self.bytes = self.bytes.saturating_sub(ev_bytes);
-                    last_evicted = ev;
-                }
-
-                // If the single item cannot fit even in an empty queue, reject.
-                if policy.caps.at_or_above_hard(0, item_bytes) {
-                    return EnqueueResult::Rejected;
-                }
-
-                if self.is_full() || policy.caps.at_or_above_hard(self.len(), self.bytes) {
-                    return EnqueueResult::Rejected;
-                }
-
-                if self.cap.is_none() {
-                    self.ensure_capacity_for_push();
-                }
-
-                self.bytes = self.bytes.saturating_add(item_bytes);
-                self.push_raw(token);
-
-                if last_evicted.is_invalid() {
-                    EnqueueResult::Enqueued
-                } else {
-                    EnqueueResult::Evicted(last_evicted)
-                }
+                EnqueueResult::Enqueued
             }
         }
     }
