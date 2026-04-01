@@ -29,6 +29,9 @@ pub use crate::telemetry::concurrent::*;
 #[cfg(feature = "std")]
 pub use crate::edge::spsc_concurrent::*;
 
+#[cfg(feature = "std")]
+pub use crate::edge::{EdgeHandleKind, ScopedEdge};
+
 #[cfg(feature = "alloc")]
 pub use crate::edge::spsc_vecdeque::*;
 

@@ -1,3 +1,6 @@
+//! **WARNING** **This module is currently an unfinished stub and should not be
+//! used in its current form, it will either be updated or removed before
+//! release.**
 //! SpscAtomicRing: high-performance SPSC ring using atomics (P2 high-perf).
 //!
 //! **Unsafe implementation** gated behind `ring_unsafe`.

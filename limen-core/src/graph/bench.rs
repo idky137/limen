@@ -1,24 +1,60 @@
 //! (Work)bench [test] Graph implementations.
 //!
-//! These are the graph structs, and correspoding trait impls that are produced by the limen-build
-//! graph builder for the following input, a concerete example has been given here for test purposes.
+//! This module contains two hand-written graph implementations that exactly
+//! mirror what `limen-codegen` / `limen-build` produce for the following DSL
+//! input. They exist so that the codegen output is always verifiable against a
+//! known-correct, reviewed reference.
+//!
+//! ## Two separate codegen invocations
+//!
+//! `TestPipeline` (no-`std`, single-threaded) and `TestPipelineStd` (std,
+//! concurrent) are produced by **two independent codegen invocations** of the
+//! same logical pipeline. In a real project using the builder API this looks
+//! like:
 //!
 //! ```text
-//! define_graph! {
-//!     pub struct TestPipeline;
+//! // Invocation 1 — no_std graph (single-threaded runtime):
+//! GraphBuilder::new()
+//!     .vis(pub)
+//!     .name("TestPipeline")
+//!     .node(Node::new(0).ty("TestCounterSourceU32_2<C, 32>").in_ports(0).out_ports(1)
+//!           .in_payload("()").out_payload("u32").name("src").ingress_policy("Q_32_POLICY"))
+//!     .node(Node::new(1).ty("TestIdentityModelNodeU32_2<32>").in_ports(1).out_ports(1)
+//!           .in_payload("u32").out_payload("u32").name("map"))
+//!     .node(Node::new(2).ty("TestSinkNodeU32_2").in_ports(1).out_ports(0)
+//!           .in_payload("u32").out_payload("()").name("snk"))
+//!     .edge(Edge::new(0).ty("Q32").payload("u32").manager("StaticMemoryManager<u32, 8>")
+//!           .from(0, 0).to(1, 0).policy("Q_32_POLICY").name("e0"))
+//!     .edge(Edge::new(1).ty("Q32").payload("u32").manager("StaticMemoryManager<u32, 8>")
+//!           .from(1, 0).to(2, 0).policy("Q_32_POLICY").name("e1"))
+//!     .concurrent(false)          // ← no ScopedGraphApi emitted
+//!     .finish()
 //!
-//!     nodes {
-//!         0: { ty: TestCounterSourceU32, in_ports: 0, out_ports: 1, in_payload: (),  out_payload: u32, name: Some("src"), ingress_policy: Q_32_POLICY },
-//!         1: { ty: TestIdentityModelNodeU32, in_ports: 1, out_ports: 1, in_payload: u32, out_payload: u32, name: Some("map") },
-//!         2: { ty: TestSinkNodeU32,   in_ports: 1, out_ports: 0, in_payload: u32, out_payload: (),  name: Some("snk") }
-//!     }
-//!
-//!     edges {
-//!         0: { ty: Q32, payload: u32, manager: StaticMemoryManager<u32, 8>, from: (0,0), to: (1,0), policy: Q_32_POLICY, name: Some("e0") },
-//!         1: { ty: Q32, payload: u32, manager: StaticMemoryManager<u32, 8>, from: (1,0), to: (2,0), policy: Q_32_POLICY, name: Some("e1") }
-//!     }
-//! }
+//! // Invocation 2 — std graph (concurrent runtime, ScopedGraphApi):
+//! GraphBuilder::new()
+//!     // ... same nodes ...
+//!     .edge(Edge::new(0).ty("ConcurrentEdge").payload("u32").manager("ConcurrentMemoryManager<u32>")
+//!           .from(0, 0).to(1, 0).policy("Q_32_POLICY").name("e0"))
+//!     .edge(Edge::new(1).ty("ConcurrentEdge").payload("u32").manager("ConcurrentMemoryManager<u32>")
+//!           .from(1, 0).to(2, 0).policy("Q_32_POLICY").name("e1"))
+//!     .concurrent(true)           // ← emits ScopedGraphApi + run_scoped impl
+//!     .finish()
 //! ```
+//!
+//! When using the proc-macro (`limen-build`), the second invocation is written
+//! with the `concurrent;` keyword in the DSL block. The edge types must be
+//! changed to `ConcurrentEdge`/`ConcurrentMemoryManager` manually (or via a
+//! separate `define_graph!` block) since the DSL does not auto-promote queue
+//! types.
+//!
+//! ## Why two invocations instead of one?
+//!
+//! The graph struct is monomorphized over its concrete edge and manager types.
+//! A no-`std` graph uses `StaticRing<N>` / `StaticMemoryManager<P, N>`;
+//! a concurrent graph uses `ConcurrentEdge` / `ConcurrentMemoryManager<P>`.
+//! These are structurally different types — they cannot be unified in a single
+//! struct. The codegen therefore requires a dedicated invocation per target
+//! flavor, each producing a distinct named struct.
 
 use crate::{
     edge::{Edge as _, EdgeOccupancy, NoQueue},
@@ -782,10 +818,26 @@ where
     }
 }
 
-/// std graph implementation using `ConcurrentEdge` — thread-safe, Clone+Send+Sync edges.
+/// Concurrent (std) graph implementation — the output of a second, separate
+/// codegen invocation with `.concurrent(true)` (builder API) or `concurrent;`
+/// (DSL).
 ///
-/// Topology mirrors `TestPipeline` (source → map → sink), but all real edges are
-/// `ConcurrentEdge` so `run_scoped` can hand clones to worker threads without wrapping.
+/// This module hand-mirrors the code that `limen-codegen` emits when
+/// `emit_concurrent = true`. It serves as a reference implementation and a
+/// regression guard: if this module stops compiling or its tests fail, the
+/// corresponding codegen change is broken.
+///
+/// Key structural differences from `TestPipeline` (the first invocation):
+///
+/// - All real edges use `ConcurrentEdge` (Arc-backed, `Clone + Send + Sync`).
+/// - All managers use `ConcurrentMemoryManager<u32>`.
+/// - The struct has only three fields: `nodes`, `edges`, `managers`.
+///   Ingress edges are **not** stored — their occupancy and policies are
+///   obtained from the owning source node at runtime (same as codegen output).
+/// - A `ScopedGraphApi<3, 3>` impl is emitted with `where` bounds requiring
+///   `ConcurrentEdge: ScopedEdge` and `ConcurrentMemoryManager<u32>: ScopedManager<u32>`.
+/// - `run_scoped` uses `ScopedEdge::scoped_handle` / `ScopedManager::scoped_handle`
+///   instead of `.clone()`, enabling future lock-free, non-Clone edge types.
 #[cfg(feature = "std")]
 pub mod concurrent_graph {
     use super::*;
@@ -799,17 +851,13 @@ pub mod concurrent_graph {
         },
         node::{
             bench::{TestCounterSourceU32_2, TestIdentityModelNodeU32_2},
-            source::{
-                probe::{new_probe_edge_pair, ConcurrentIngressEdgeLink, SourceIngressUpdater},
-                SourceNode,
-            },
+            source::SourceNode,
             StepContext, StepResult,
         },
-        policy::{EdgePolicy, WatermarkState},
+        policy::EdgePolicy,
         prelude::{
             ConcurrentMemoryManager, EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink,
             PlatformClock, StaticMemoryManager, Telemetry, WorkerDecision, WorkerScheduler,
-            WorkerState,
         },
         types::{EdgeIndex, NodeIndex, PortId, PortIndex},
     };
@@ -825,6 +873,10 @@ pub mod concurrent_graph {
     type SnkNode = SinkNode<TestSinkNodeU32_2, u32, 1>;
 
     /// Concrete std graph using `ConcurrentEdge` (Arc-backed, Clone+Send+Sync).
+    ///
+    /// Mirrors the output of a `concurrent(true)` codegen invocation.
+    /// Ingress edges are not stored: occupancy and policy are obtained from the
+    /// source node at runtime, matching codegen output exactly.
     #[allow(clippy::complexity)]
     pub struct TestPipelineStd<SrcClk: PlatformClock + Send + 'static> {
         nodes: (
@@ -833,22 +885,24 @@ pub mod concurrent_graph {
             NodeLink<SnkNode, 1, 0, u32, ()>,
         ),
         edges: (EdgeLink<ConcurrentEdge>, EdgeLink<ConcurrentEdge>),
-        ingress_edges: [ConcurrentIngressEdgeLink<u32>; 1],
-        ingress_updaters: [Option<SourceIngressUpdater>; 1],
         managers: (ConcMgr32, ConcMgr32),
     }
 
     impl<SrcClk: PlatformClock + Send + 'static> TestPipelineStd<SrcClk> {
-        /// Create a new TestPipelineStd from given nodes, edges and memory managers.
+        /// Construct a new concurrent graph instance.
+        ///
+        /// Mirrors the `new(..)` constructor emitted by codegen for a
+        /// `concurrent(true)` graph. Ingress probe edges are not created here —
+        /// ingress occupancy and policy are read directly from the source node.
         #[inline]
         pub fn new(
             node_0: impl Into<SrcNode<SrcClk>>,
             node_1: MapNode,
             node_2: impl Into<SnkNode>,
-            q_0: ConcurrentEdge,
             q_1: ConcurrentEdge,
-            mgr_0: ConcMgr32,
+            q_2: ConcurrentEdge,
             mgr_1: ConcMgr32,
+            mgr_2: ConcMgr32,
         ) -> Self {
             let node_0: SrcNode<SrcClk> = node_0.into();
             let node_2: SnkNode = node_2.into();
@@ -870,7 +924,7 @@ pub mod concurrent_graph {
             );
 
             let e0 = EdgeLink::new(
-                q_0,
+                q_1,
                 EdgeIndex::from(1usize),
                 PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
                 PortId::new(NodeIndex::from(1usize), PortIndex::from(0)),
@@ -878,7 +932,7 @@ pub mod concurrent_graph {
                 Some("e0"),
             );
             let e1 = EdgeLink::new(
-                q_1,
+                q_2,
                 EdgeIndex::from(2usize),
                 PortId::new(NodeIndex::from(1usize), PortIndex::from(0)),
                 PortId::new(NodeIndex::from(2usize), PortIndex::from(0)),
@@ -886,38 +940,24 @@ pub mod concurrent_graph {
                 Some("e1"),
             );
 
-            let (probe_edge_0, updater_0) = new_probe_edge_pair::<u32>();
-            let ingress_edge_0 = ConcurrentIngressEdgeLink::from_probe(
-                probe_edge_0,
-                EdgeIndex::from(0usize),
-                PortId::new(EXTERNAL_INGRESS_NODE, PortIndex::from(0)),
-                PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
-                n0.node().source_ref().ingress_policy(),
-                Some("ingress0"),
-            );
-
             Self {
                 nodes: (n0, n1, n2),
                 edges: (e0, e1),
-                ingress_edges: [ingress_edge_0],
-                ingress_updaters: [Some(updater_0)],
-                managers: (mgr_0, mgr_1),
+                managers: (mgr_1, mgr_2),
             }
         }
 
-        /// Take the ingress updater for source 0, moving it to the worker thread.
-        /// Returns `None` if already taken.
-        #[inline]
-        pub fn take_ingress_updater_0(&mut self) -> Option<SourceIngressUpdater> {
-            self.ingress_updaters[0].take()
-        }
-
-        /// Run the graph concurrently using `std::thread::scope` with
-        /// scheduler-controlled workers.
+        /// Execute all nodes concurrently via `std::thread::scope`.
         ///
-        /// Spawns one thread per node. Each worker queries edge occupancy,
-        /// builds a [`WorkerState`] snapshot, and calls `scheduler.decide()`
-        /// to get stepping instructions. All threads join when scope exits.
+        /// This method mirrors the body of `run_scoped` as emitted by codegen
+        /// when `emit_concurrent = true`. Structure:
+        ///
+        /// - Step 1: edge policy copies (before node borrows; `EdgePolicy: Copy`)
+        /// - Step 2: per-node scoped edge + manager handles via `ScopedEdge` /
+        ///   `ScopedManager` — future lock-free non-Clone types work transparently
+        /// - Step 3: per-worker telemetry clones
+        /// - Step 4: disjoint node borrows (Rust tracks tuple fields separately)
+        /// - Step 5: one scoped thread per node, scheduler-driven
         fn run_scoped_impl<C, T, S>(&mut self, clock: C, telemetry: T, scheduler: S)
         where
             C: PlatformClock + Clone + Send + Sync + 'static,
@@ -927,33 +967,44 @@ pub mod concurrent_graph {
             MapNode: Send,
             SnkNode: Send,
         {
-            let pol0 = *self.edges.0.policy();
-            let pol1 = *self.edges.1.policy();
+            // --- Step 1: edge policy copies ---
+            let pol_0 = *self.edges.0.policy();
+            let pol_1 = *self.edges.1.policy();
 
-            // Clone edges (ConcurrentEdge: Clone via Arc).
-            let e0_out = self.edges.0.queue().clone();
-            let e0_in = self.edges.0.queue().clone();
-            let e1_out = self.edges.1.queue().clone();
-            let e1_in = self.edges.1.queue().clone();
+            // --- Step 2: per-node scoped edge handles + manager handles ---
+            // Uses ScopedEdge / ScopedManager instead of Clone so future
+            // lock-free, non-Clone edge and manager types work transparently.
+            //
+            // node 0 (source): no inputs, 1 output (real edge 0)
+            let out_e_0_0 = crate::edge::ScopedEdge::scoped_handle(
+                self.edges.0.queue(),
+                crate::edge::EdgeHandleKind::Producer,
+            );
+            let out_m_0_0 = crate::memory::manager::ScopedManager::scoped_handle(&self.managers.0);
+            // node 1 (model): 1 input (real edge 0), 1 output (real edge 1)
+            let in_e_1_0 = crate::edge::ScopedEdge::scoped_handle(
+                self.edges.0.queue(),
+                crate::edge::EdgeHandleKind::Consumer,
+            );
+            let in_m_1_0 = crate::memory::manager::ScopedManager::scoped_handle(&self.managers.0);
+            let out_e_1_0 = crate::edge::ScopedEdge::scoped_handle(
+                self.edges.1.queue(),
+                crate::edge::EdgeHandleKind::Producer,
+            );
+            let out_m_1_0 = crate::memory::manager::ScopedManager::scoped_handle(&self.managers.1);
+            // node 2 (sink): 1 input (real edge 1), no outputs
+            let in_e_2_0 = crate::edge::ScopedEdge::scoped_handle(
+                self.edges.1.queue(),
+                crate::edge::EdgeHandleKind::Consumer,
+            );
+            let in_m_2_0 = crate::memory::manager::ScopedManager::scoped_handle(&self.managers.1);
 
-            // Clone managers (ConcurrentMemoryManager: Clone).
-            let mgr0_n0 = self.managers.0.clone();
-            let mgr0_n1 = self.managers.0.clone();
-            let mgr1_n1 = self.managers.1.clone();
-            let mgr1_n2 = self.managers.1.clone();
+            // --- Step 3: per-worker telemetry ---
+            let telem_0 = telemetry.clone();
+            let telem_1 = telemetry.clone();
+            let telem_2 = telemetry;
 
-            // Clone telemetry.
-            let telem0 = telemetry.clone();
-            let telem1 = telemetry.clone();
-            let telem2 = telemetry;
-
-            // Ingress updater for node 0 (probe reports source depth to scheduler).
-            let updater_0 = self.ingress_updaters[0]
-                .as_ref()
-                .expect("ingress updater missing")
-                .clone();
-
-            // Disjoint node borrows — Rust tracks tuple fields as separate locations.
+            // --- Step 4: disjoint node borrows ---
             let n0 = &mut self.nodes.0;
             let n1 = &mut self.nodes.1;
             let n2 = &mut self.nodes.2;
@@ -961,196 +1012,216 @@ pub mod concurrent_graph {
             let clock_ref = &clock;
             let sched_ref = &scheduler;
 
-            std::thread::scope(|scope| {
+            ::std::thread::scope(|scope| {
                 // --- Node 0: source (readiness from ingress_occupancy) ---
                 {
-                    let mut e0_out = e0_out;
-                    let mut mgr = mgr0_n0;
-                    let mut telem = telem0;
-                    scope.spawn(move || {
-                        let mut state = WorkerState::new(0, 3, clock_ref.now_ticks());
-                        loop {
-                            state.current_tick = clock_ref.now_ticks();
+                    fn _assert_send<_T: core::marker::Send>() {}
+                    _assert_send::<SrcNode<SrcClk>>();
+                }
+                scope.spawn(move || {
+                    let mut out_e_0_0 = out_e_0_0;
+                    let mut out_m_0_0 = out_m_0_0;
+                    let mut telem = telem_0;
 
-                            // Source node: readiness from ingress occupancy.
-                            let ingress_occ = n0.node().source_ref().ingress_occupancy();
-                            let any_input = *ingress_occ.items() > 0;
+                    let mut state =
+                        crate::scheduling::WorkerState::new(0, 3, clock_ref.now_ticks());
+                    loop {
+                        state.current_tick = clock_ref.now_ticks();
 
-                            // Output backpressure from edge 0.
-                            let out_occ = e0_out.occupancy(&pol0);
-                            state.backpressure = *out_occ.watermark();
+                        let _ingress_occ = n0.node().source_ref().ingress_occupancy();
+                        let _any_input = *_ingress_occ.items() > 0;
 
-                            state.readiness = if !any_input {
-                                crate::scheduling::Readiness::NotReady
-                            } else if state.backpressure >= WatermarkState::BetweenSoftAndHard {
-                                crate::scheduling::Readiness::ReadyUnderPressure
-                            } else {
-                                crate::scheduling::Readiness::Ready
-                            };
-
-                            match sched_ref.decide(&state) {
-                                WorkerDecision::Step => {
-                                    let mut ctx = StepContext::new(
-                                        [] as [&mut NoQueue; 0],
-                                        [&mut e0_out],
-                                        [] as [&mut StaticMemoryManager<(), 1>; 0],
-                                        [&mut mgr],
-                                        [] as [EdgePolicy; 0],
-                                        [pol0],
-                                        0u32,
-                                        [] as [u32; 0],
-                                        [1u32],
-                                        clock_ref,
-                                        &mut telem,
-                                    );
-                                    match n0.step(&mut ctx) {
-                                        Ok(sr) => {
-                                            state.last_step = Some(sr);
-                                            state.last_error = false;
-                                        }
-                                        Err(_) => {
-                                            state.last_step = None;
-                                            state.last_error = true;
-                                        }
-                                    }
-                                    // Update ingress probe for cross-thread visibility.
-                                    let occ = n0.node().source_ref().ingress_occupancy();
-                                    updater_0.update(*occ.items(), *occ.bytes());
-                                }
-                                WorkerDecision::WaitMicros(d) => {
-                                    std::thread::sleep(std::time::Duration::from_micros(d));
-                                    state.last_step = None;
-                                    state.last_error = false;
-                                }
-                                WorkerDecision::Stop => break,
+                        let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
+                        {
+                            let _occ = crate::edge::Edge::occupancy(&out_e_0_0, &pol_0);
+                            if *_occ.watermark() > _max_wm {
+                                _max_wm = *_occ.watermark();
                             }
                         }
-                    });
-                }
+                        state.backpressure = _max_wm;
 
-                // --- Node 1: map (readiness from input edge 0) ---
+                        state.readiness = if !_any_input {
+                            crate::scheduling::Readiness::NotReady
+                        } else if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
+                            crate::scheduling::Readiness::ReadyUnderPressure
+                        } else {
+                            crate::scheduling::Readiness::Ready
+                        };
+
+                        match sched_ref.decide(&state) {
+                            WorkerDecision::Step => {
+                                let mut ctx = crate::node::StepContext::new(
+                                    [] as [&mut NoQueue; 0],
+                                    [&mut out_e_0_0],
+                                    [] as [&mut StaticMemoryManager<(), 1>; 0],
+                                    [&mut out_m_0_0],
+                                    [],
+                                    [pol_0],
+                                    0u32,
+                                    [],
+                                    [1u32],
+                                    clock_ref,
+                                    &mut telem,
+                                );
+                                match n0.step(&mut ctx) {
+                                    Ok(sr) => {
+                                        state.last_step = Some(sr);
+                                        state.last_error = false;
+                                    }
+                                    Err(_e) => {
+                                        state.last_step = None;
+                                        state.last_error = true;
+                                    }
+                                }
+                            }
+                            WorkerDecision::WaitMicros(d) => {
+                                ::std::thread::sleep(::std::time::Duration::from_micros(d));
+                                state.last_step = None;
+                                state.last_error = false;
+                            }
+                            WorkerDecision::Stop => break,
+                        }
+                    }
+                });
+
+                // --- Node 1: model (readiness from input edge 0) ---
                 {
-                    let mut e0_in = e0_in;
-                    let mut e1_out = e1_out;
-                    let mut mgr_in = mgr0_n1;
-                    let mut mgr_out = mgr1_n1;
-                    let mut telem = telem1;
-                    scope.spawn(move || {
-                        let mut state = WorkerState::new(1, 3, clock_ref.now_ticks());
-                        loop {
-                            state.current_tick = clock_ref.now_ticks();
+                    fn _assert_send<_T: core::marker::Send>() {}
+                    _assert_send::<MapNode>();
+                }
+                scope.spawn(move || {
+                    let mut in_e_1_0 = in_e_1_0;
+                    let mut in_m_1_0 = in_m_1_0;
+                    let mut out_e_1_0 = out_e_1_0;
+                    let mut out_m_1_0 = out_m_1_0;
+                    let mut telem = telem_1;
 
-                            // Input readiness from edge 0.
-                            let in_occ = e0_in.occupancy(&pol0);
-                            let any_input = *in_occ.items() > 0;
+                    let mut state =
+                        crate::scheduling::WorkerState::new(1, 3, clock_ref.now_ticks());
+                    loop {
+                        state.current_tick = clock_ref.now_ticks();
 
-                            // Output backpressure from edge 1.
-                            let out_occ = e1_out.occupancy(&pol1);
-                            state.backpressure = *out_occ.watermark();
+                        let _any_input =
+                            false || (*crate::edge::Edge::occupancy(&in_e_1_0, &pol_0).items() > 0);
 
-                            state.readiness = if !any_input {
-                                crate::scheduling::Readiness::NotReady
-                            } else if state.backpressure >= WatermarkState::BetweenSoftAndHard {
-                                crate::scheduling::Readiness::ReadyUnderPressure
-                            } else {
-                                crate::scheduling::Readiness::Ready
-                            };
-
-                            match sched_ref.decide(&state) {
-                                WorkerDecision::Step => {
-                                    let mut ctx = StepContext::new(
-                                        [&mut e0_in],
-                                        [&mut e1_out],
-                                        [&mut mgr_in],
-                                        [&mut mgr_out],
-                                        [pol0],
-                                        [pol1],
-                                        1u32,
-                                        [1u32],
-                                        [2u32],
-                                        clock_ref,
-                                        &mut telem,
-                                    );
-                                    match n1.step(&mut ctx) {
-                                        Ok(sr) => {
-                                            state.last_step = Some(sr);
-                                            state.last_error = false;
-                                        }
-                                        Err(_) => {
-                                            state.last_step = None;
-                                            state.last_error = true;
-                                        }
-                                    }
-                                }
-                                WorkerDecision::WaitMicros(d) => {
-                                    std::thread::sleep(std::time::Duration::from_micros(d));
-                                    state.last_step = None;
-                                    state.last_error = false;
-                                }
-                                WorkerDecision::Stop => break,
+                        let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
+                        {
+                            let _occ = crate::edge::Edge::occupancy(&out_e_1_0, &pol_1);
+                            if *_occ.watermark() > _max_wm {
+                                _max_wm = *_occ.watermark();
                             }
                         }
-                    });
-                }
+                        state.backpressure = _max_wm;
+
+                        state.readiness = if !_any_input {
+                            crate::scheduling::Readiness::NotReady
+                        } else if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
+                            crate::scheduling::Readiness::ReadyUnderPressure
+                        } else {
+                            crate::scheduling::Readiness::Ready
+                        };
+
+                        match sched_ref.decide(&state) {
+                            WorkerDecision::Step => {
+                                let mut ctx = crate::node::StepContext::new(
+                                    [&mut in_e_1_0],
+                                    [&mut out_e_1_0],
+                                    [&mut in_m_1_0],
+                                    [&mut out_m_1_0],
+                                    [pol_0],
+                                    [pol_1],
+                                    1u32,
+                                    [1u32],
+                                    [2u32],
+                                    clock_ref,
+                                    &mut telem,
+                                );
+                                match n1.step(&mut ctx) {
+                                    Ok(sr) => {
+                                        state.last_step = Some(sr);
+                                        state.last_error = false;
+                                    }
+                                    Err(_e) => {
+                                        state.last_step = None;
+                                        state.last_error = true;
+                                    }
+                                }
+                            }
+                            WorkerDecision::WaitMicros(d) => {
+                                ::std::thread::sleep(::std::time::Duration::from_micros(d));
+                                state.last_step = None;
+                                state.last_error = false;
+                            }
+                            WorkerDecision::Stop => break,
+                        }
+                    }
+                });
 
                 // --- Node 2: sink (readiness from input edge 1, no outputs) ---
                 {
-                    let mut e1_in = e1_in;
-                    let mut mgr = mgr1_n2;
-                    let mut telem = telem2;
-                    scope.spawn(move || {
-                        let mut state = WorkerState::new(2, 3, clock_ref.now_ticks());
-                        loop {
-                            state.current_tick = clock_ref.now_ticks();
+                    fn _assert_send<_T: core::marker::Send>() {}
+                    _assert_send::<SnkNode>();
+                }
+                scope.spawn(move || {
+                    let mut in_e_2_0 = in_e_2_0;
+                    let mut in_m_2_0 = in_m_2_0;
+                    let mut telem = telem_2;
 
-                            // Input readiness from edge 1.
-                            let in_occ = e1_in.occupancy(&pol1);
-                            let any_input = *in_occ.items() > 0;
+                    let mut state =
+                        crate::scheduling::WorkerState::new(2, 3, clock_ref.now_ticks());
+                    loop {
+                        state.current_tick = clock_ref.now_ticks();
 
-                            // Sink has no outputs — no backpressure.
+                        let _any_input =
+                            false || (*crate::edge::Edge::occupancy(&in_e_2_0, &pol_1).items() > 0);
 
-                            state.readiness = if !any_input {
-                                crate::scheduling::Readiness::NotReady
-                            } else {
-                                crate::scheduling::Readiness::Ready
-                            };
+                        let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
+                        // no output edges — no watermark check
+                        state.backpressure = _max_wm;
 
-                            match sched_ref.decide(&state) {
-                                WorkerDecision::Step => {
-                                    let mut ctx = StepContext::new(
-                                        [&mut e1_in],
-                                        [] as [&mut NoQueue; 0],
-                                        [&mut mgr],
-                                        [] as [&mut StaticMemoryManager<(), 1>; 0],
-                                        [pol1],
-                                        [] as [EdgePolicy; 0],
-                                        2u32,
-                                        [2u32],
-                                        [] as [u32; 0],
-                                        clock_ref,
-                                        &mut telem,
-                                    );
-                                    match n2.step(&mut ctx) {
-                                        Ok(sr) => {
-                                            state.last_step = Some(sr);
-                                            state.last_error = false;
-                                        }
-                                        Err(_) => {
-                                            state.last_step = None;
-                                            state.last_error = true;
-                                        }
+                        state.readiness = if !_any_input {
+                            crate::scheduling::Readiness::NotReady
+                        } else if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
+                            crate::scheduling::Readiness::ReadyUnderPressure
+                        } else {
+                            crate::scheduling::Readiness::Ready
+                        };
+
+                        match sched_ref.decide(&state) {
+                            WorkerDecision::Step => {
+                                let mut ctx = crate::node::StepContext::new(
+                                    [&mut in_e_2_0],
+                                    [] as [&mut NoQueue; 0],
+                                    [&mut in_m_2_0],
+                                    [] as [&mut StaticMemoryManager<(), 1>; 0],
+                                    [pol_1],
+                                    [],
+                                    2u32,
+                                    [2u32],
+                                    [],
+                                    clock_ref,
+                                    &mut telem,
+                                );
+                                match n2.step(&mut ctx) {
+                                    Ok(sr) => {
+                                        state.last_step = Some(sr);
+                                        state.last_error = false;
+                                    }
+                                    Err(_e) => {
+                                        state.last_step = None;
+                                        state.last_error = true;
                                     }
                                 }
-                                WorkerDecision::WaitMicros(d) => {
-                                    std::thread::sleep(std::time::Duration::from_micros(d));
-                                    state.last_step = None;
-                                    state.last_error = false;
-                                }
-                                WorkerDecision::Stop => break,
                             }
+                            WorkerDecision::WaitMicros(d) => {
+                                ::std::thread::sleep(::std::time::Duration::from_micros(d));
+                                state.last_step = None;
+                                state.last_error = false;
+                            }
+                            WorkerDecision::Stop => break,
                         }
-                    });
-                }
+                    }
+                });
             });
         }
     }
@@ -1160,6 +1231,8 @@ pub mod concurrent_graph {
         for TestPipelineStd<SrcClk>
     where
         SrcNode<SrcClk>: Send,
+        ConcurrentEdge: crate::edge::ScopedEdge,
+        ConcMgr32: crate::memory::manager::ScopedManager<u32>,
     {
         fn run_scoped<C, T, S>(&mut self, clock: C, telemetry: T, scheduler: S)
         where
@@ -1185,7 +1258,12 @@ pub mod concurrent_graph {
         #[inline]
         fn get_edge_descriptors(&self) -> [EdgeDescriptor; 3] {
             [
-                self.ingress_edges[0].descriptor(),
+                EdgeDescriptor::new(
+                    EdgeIndex::from(0usize),
+                    PortId::new(EXTERNAL_INGRESS_NODE, PortIndex::from(0)),
+                    PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
+                    Some("ingress0"),
+                ),
                 self.edges.0.descriptor(),
                 self.edges.1.descriptor(),
             ]
@@ -1212,7 +1290,10 @@ pub mod concurrent_graph {
         #[inline]
         fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError> {
             let occ = match E {
-                0 => self.ingress_edges[0].occupancy(&self.ingress_edges[0].policy()),
+                0 => {
+                    let src = self.nodes.0.node().source_ref();
+                    src.ingress_occupancy()
+                }
                 1 => {
                     let e = &self.edges.0;
                     e.occupancy(e.policy())
