@@ -11,7 +11,7 @@ use limen_core::{
 };
 
 #[cfg(feature = "std")]
-use limen_core::prelude::ConcurrentMemoryManager;
+use limen_core::prelude::{ConcurrentEdge, ConcurrentMemoryManager};
 
 fn main() {
     GraphBuilder::new("SimpleExampleNoStdGraph", GraphVisibility::Public)
@@ -75,7 +75,6 @@ fn main() {
                 ))
                 .name(Some("map->sink")),
         )
-        .concurrent(false)
         .finish()
         .write("simple_example_nostd_graph")
         .unwrap();
@@ -116,7 +115,7 @@ fn main() {
         )
         .edge(
             Edge::new(0)
-                .ty::<TestSpscRingBuf<8>>()
+                .ty::<ConcurrentEdge>()
                 .payload::<u32>()
                 .manager_ty::<ConcurrentMemoryManager<u32>>()
                 .from(0, 0)
@@ -130,7 +129,7 @@ fn main() {
         )
         .edge(
             Edge::new(1)
-                .ty::<TestSpscRingBuf<8>>()
+                .ty::<ConcurrentEdge>()
                 .payload::<u32>()
                 .manager_ty::<ConcurrentMemoryManager<u32>>()
                 .from(1, 0)

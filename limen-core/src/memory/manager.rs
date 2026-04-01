@@ -225,3 +225,23 @@ pub trait MemoryManager<P: Payload>: HeaderStore {
     /// host memory or another backing class.
     fn memory_class(&self) -> MemoryClass;
 }
+
+/// Scoped handle factory for memory managers used in concurrent execution.
+///
+/// Analogous to [`ScopedEdge`](crate::edge::ScopedEdge) for memory managers.
+/// The GAT `Handle<'a>` allows implementations to return either an owned
+/// clone (Arc-based) or a borrowed view (future lock-free managers).
+#[cfg(feature = "std")]
+pub trait ScopedManager<P: crate::message::payload::Payload>:
+    crate::memory::manager::MemoryManager<P>
+{
+    /// Per-worker handle type.
+    type Handle<'a>: crate::memory::manager::MemoryManager<P> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Create a scoped handle for a worker thread.
+    fn scoped_handle<'a>(&'a self) -> Self::Handle<'a>
+    where
+        Self: 'a;
+}

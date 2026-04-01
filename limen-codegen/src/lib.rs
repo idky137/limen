@@ -4,9 +4,8 @@
 //!
 //! This crate turns a compact, declarative graph DSL into fully-typed Rust
 //! implementations that conform to the `limen-core` graph, node, edge, and
-//! policy traits. The emitted code includes **two graph flavors**:
-//! a non-`std` (embedded) graph and a `std` (concurrent) graph, with the latter
-//! gated behind `#[cfg(feature = "std")]` **in the downstream crate**.
+//! policy traits. The emitted code always includes a single concrete graph
+//! structure, with an optional std-only scoped execution API.
 //!
 //! It is designed to be used in **two** ways:
 //!
@@ -71,8 +70,13 @@
 //!                policy: my_crate::policies::EDGE_POLICY,
 //!                name: Some("map->sink")
 //!            },
+//!
+//!        concurrent;
 //!        }
 //!    ```
+//!
+//! The trailing `concurrent;` keyword does not generate a separate graph type.
+//! It adds the std-only `ScopedGraphApi` implementation for the same graph.
 //!
 //! 2. **Build-script mode** (recommended when proc-macros slow down the language server or you want to inspect/generated source):
 //!
@@ -97,31 +101,98 @@
 //!    include!(concat!(env!("OUT_DIR"), "/my_graph.rs"));
 //!    ```
 //!
+//!    You can also build the graph programmatically in `build.rs` using
+//!    [`builder::GraphBuilder`] instead of writing the DSL as a string:
+//!
+//!    ```rust,ignore
+//!    use limen_codegen::builder::{Edge, GraphBuilder, GraphVisibility, Node};
+//!    use limen_core::policy::{AdmissionPolicy, EdgePolicy, OverBudgetAction, QueueCaps};
+//!
+//!    fn main() {
+//!        let edge_policy = EdgePolicy::new(
+//!            QueueCaps::new(8, 6, None, None),
+//!            AdmissionPolicy::DropNewest,
+//!            OverBudgetAction::Drop,
+//!        );
+//!
+//!        GraphBuilder::new("MyGraph", GraphVisibility::Public)
+//!            .node(
+//!                Node::new(0)
+//!                    .ty::<my_crate::nodes::MySource>()
+//!                    .in_ports(0)
+//!                    .out_ports(1)
+//!                    .in_payload::<()>()
+//!                    .out_payload::<u32>()
+//!                    .name(Some("src"))
+//!                    .ingress_policy(edge_policy),
+//!            )
+//!            .node(
+//!                Node::new(1)
+//!                    .ty::<my_crate::nodes::MyMap>()
+//!                    .in_ports(1)
+//!                    .out_ports(1)
+//!                    .in_payload::<u32>()
+//!                    .out_payload::<u32>()
+//!                    .name(Some("map")),
+//!            )
+//!            .node(
+//!                Node::new(2)
+//!                    .ty::<my_crate::nodes::MySink>()
+//!                    .in_ports(1)
+//!                    .out_ports(0)
+//!                    .in_payload::<u32>()
+//!                    .out_payload::<()>()
+//!                    .name(Some("sink")),
+//!            )
+//!            .edge(
+//!                Edge::new(0)
+//!                    .ty::<my_crate::queues::MyQueue<u32, 8>>()
+//!                    .payload::<u32>()
+//!                    .manager_ty::<my_crate::memory::MyMemoryManager<u32>>()
+//!                    .from(0, 0)
+//!                    .to(1, 0)
+//!                    .policy(edge_policy)
+//!                    .name(Some("src->map")),
+//!            )
+//!            .edge(
+//!                Edge::new(1)
+//!                    .ty::<my_crate::queues::MyQueue<u32, 8>>()
+//!                    .payload::<u32>()
+//!                    .manager_ty::<my_crate::memory::MyMemoryManager<u32>>()
+//!                    .from(1, 0)
+//!                    .to(2, 0)
+//!                    .policy(edge_policy)
+//!                    .name(Some("map->sink")),
+//!            )
+//!            .concurrent(false)
+//!            .finish()
+//!            .write("my_graph")
+//!            .unwrap();
+//!    }
+//!    ```
+//!
+//!    Set `.concurrent(true)` to additionally emit the std-only
+//!    `ScopedGraphApi` implementation for the same graph type.
+//!
 //! ## What gets generated (at a glance)
 //!
-//! Each invocation emits exactly **one** graph flavor, controlled by the
-//! `concurrent` flag (DSL keyword or builder method):
+//! Each invocation emits a single concrete graph type.
 //!
-//! - **Non-`std` graph** (default, `concurrent = false`): a concrete struct
-//!   named exactly as your DSL type (for example, `MyGraph`) which stores:
+//! - The generated graph struct stores:
 //!   - `nodes`: a tuple of `NodeLink<..>` (one per node),
 //!   - `edges`: a tuple of `EdgeLink<..>` (one per **real** edge; see ingress below),
 //!   - `managers`: a tuple of memory manager instances (one per real edge).
-//!     This flavor does **not** implement owned-bundle handoff and is suitable
-//!     for `no_std` targets.
 //!
-//! - **`std` (concurrent) graph** (`concurrent = true`): a `#[cfg(feature = "std")]`-gated
-//!   module `concurrent_graph` containing:
-//!   - `struct MyGraphStd`: uses lock-free SPSC queues via `ConcurrentEdgeLink`, and
-//!     exposes external ingress to sources via probe links,
-//!   - an owned-bundle enum `MyGraphStdOwnedBundle` enabling safe node + endpoint handoff,
-//!   - implementations that support stepping a moved-out bundle.
+//! - When `concurrent = false` (default), codegen emits the graph structure and
+//!   the core `GraphApi` / node-access / context-builder impls only.
 //!
-//! To get **both** flavors for the same topology, make two codegen calls with
-//! different graph names — one with `concurrent = false`, one with `concurrent = true`.
+//! - When `concurrent = true`, codegen additionally emits a std-only
+//!   `ScopedGraphApi` implementation for that same graph type, behind
+//!   `#[cfg(feature = "std")]` in the downstream crate.
 //!
 //! ### Feature flag note
-//! The `std`-flavored code is emitted behind `#[cfg(feature = "std")]` **in the generated file**.
+//! The std-only scoped execution code is emitted behind `#[cfg(feature = "std")]`
+//! **in the generated file**.
 //! This crate (`limen-codegen`) does not define or forward a `std` feature; you control it in
 //! the crate that **compiles** the generated code.
 //!
@@ -201,19 +272,21 @@
 //!
 //! - A tuple of `NodeLink<..>` (one per node).
 //! - A tuple of `EdgeLink<..>` (one per **real** edge; ingress edges are synthetic).
+//! - A tuple of memory managers (one per **real** edge).
 //!
 //! It also implements the `limen_core::graph::GraphApi` for the concrete graph type, plus the
 //! per-index helper traits (`GraphNodeAccess`, `GraphEdgeAccess`, `GraphNodeTypes`,
 //! `GraphNodeContextBuilder`) that wire the graph into the Limen runtime APIs.
-//!    - The concurrent queue types referenced by the `std` flavor live under
-//!      `limen_core::edge::spsc_concurrent`.
+//!
+//! If `concurrent = true`, the generated code also includes a std-only
+//! `ScopedGraphApi` impl for the same graph type.
 //!
 //! ## Programmatic entry points (when not using the proc macro)
 //!
 //! All of the following:
 //! - parse the DSL (from tokens or string),
 //! - validate its structure and typing,
-//! - and **emit both flavors** (non-`std` and `std`-gated) into a single token stream or file.
+//! - and emit the graph plus any optional scoped API selected by the input AST.
 //!
 //! - [`expand_tokens`]: parse+validate+emit from a token stream (used by the proc macro).
 //! - [`expand_str_to_tokens`]: parse+validate+emit from a `&str` DSL (for build scripts or tests).
@@ -222,8 +295,8 @@
 //! - [`expand_ast_to_tokens`], [`expand_ast_to_file`]: like the above, but take a typed AST
 //!   (for use with the `builder` module so you can write graphs as normal Rust).
 //!
-//! Each entry point emits exactly one graph flavor per call, determined by the
-//! `emit_concurrent` flag on the input AST
+//! Each entry point emits the single graph type, plus the optional std-only
+//! scoped execution API determined by the `emit_concurrent` flag on the input AST.
 //!
 //! All entry points perform **validation** before emitting code. Errors are returned as
 //! [`CodegenError`], with precise messages for parsing, validation, pretty-print, or I/O failures.
@@ -293,8 +366,9 @@ pub fn write_tokens_pretty_or_raw<P: AsRef<std::path::Path>>(
 
 /// Parse, validate, and emit Rust code from a proc-macro input token stream.
 ///
-/// Emits the graph flavor selected by the `concurrent` keyword in the DSL:
-/// non-`std` (default) or `std`-gated concurrent.
+/// Emits the graph selected by the DSL, plus the optional std-only
+/// `ScopedGraphApi` implementation when the trailing `concurrent;`
+/// keyword is present.
 ///
 /// This is the entry used by `limen-build::define_graph! { ... }`.
 ///
@@ -317,7 +391,8 @@ pub fn expand_tokens(input: TokenStream2) -> Result<TokenStream2, CodegenError> 
 
 /// Parse, validate, and emit Rust code from a DSL string (build script helper).
 ///
-/// Emits the graph flavor selected by the `concurrent` keyword in the DSL.
+/// Emits the graph, plus the optional std-only `ScopedGraphApi`
+/// implementation selected by the `concurrent` keyword in the DSL.
 ///
 /// Typical usage is inside `build.rs`, or in tests that snapshot generated code.
 ///

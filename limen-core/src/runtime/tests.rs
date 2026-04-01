@@ -193,18 +193,23 @@ fn core_pipeline_runs_with_nostd_runtime() {
 #[cfg(feature = "std")]
 #[test]
 fn std_pipeline_runs_with_std_runtime() {
+    use std::io::Stdout;
+
     use crate::{
         graph::bench::concurrent_graph::TestPipelineStd,
-        prelude::{concurrent::spawn_telemetry_core, sink::IoLineWriter},
-        runtime::bench::concurrent_runtime::TestStdRuntime,
+        prelude::{concurrent::spawn_telemetry_core, sink::IoLineWriter, ConcurrentEdge},
+        runtime::bench::concurrent_runtime::TestScopedRuntime,
         telemetry::concurrent::TelemetrySender,
     };
 
     type StdTestTelemetryInner = GraphTelemetry<3, 3, IoLineWriter<std::io::Stdout>>;
     type StdTestTelemetry = TelemetrySender<StdTestTelemetryInner>;
 
+    // Concrete queue type used by the test pipelines
+    type StdQ32 = ConcurrentEdge;
+
     type StdGraph = TestPipelineStd<NoStdTestClock>;
-    type StdRuntime = TestStdRuntime<StdGraph, NoStdTestClock, StdTestTelemetry, 3, 3>;
+    type StdRuntime = TestScopedRuntime<NoStdTestClock, StdTestTelemetry, 3, 3>;
 
     let node_policy = NodePolicy::new(
         BatchingPolicy::none(),
@@ -256,11 +261,11 @@ fn std_pipeline_runs_with_std_runtime() {
     );
 
     // queues
-    let q0: Q32 = Q32::default();
-    let q1: Q32 = Q32::default();
+    let q0: StdQ32 = StdQ32::new(32);
+    let q1: StdQ32 = StdQ32::new(32);
 
     // telemetry: GraphTelemetry wrapped in a concurrent TelemetrySender
-    let sink = IoLineWriter::<std::io::Stdout>::stdout_writer();
+    let sink = IoLineWriter::<Stdout>::stdout_writer();
     let inner_telemetry: StdTestTelemetryInner = StdTestTelemetryInner::new(0, true, sink);
     let telemetry_core = spawn_telemetry_core(inner_telemetry);
     let telemetry: StdTestTelemetry = telemetry_core.sender();
@@ -284,13 +289,26 @@ fn std_pipeline_runs_with_std_runtime() {
     graph.write_all_edge_occupancies(&mut occ).unwrap();
     println!(
         "--- [initial_graph_occupancies] --- {:?}\n",
-        runtime.occupancies()
+        <TestScopedRuntime<
+            NoStdLinuxMonotonicClock,
+            TelemetrySender<GraphTelemetry<3, 3, IoLineWriter<Stdout>>>,
+            3,
+            3,
+        > as LimenRuntime<StdGraph, 3, 3>>::occupancies(&runtime)
     );
 
     for _ in 0..9 {
         let _ = runtime.step(&mut graph).unwrap();
 
-        println!("--- [graph_occupancies] --- {:?}", runtime.occupancies());
+        println!(
+            "--- [graph_occupancies] --- {:?}",
+            <TestScopedRuntime<
+                NoStdLinuxMonotonicClock,
+                TelemetrySender<GraphTelemetry<3, 3, IoLineWriter<Stdout>>>,
+                3,
+                3,
+            > as LimenRuntime<StdGraph, 3, 3>>::occupancies(&runtime)
+        );
     }
 
     // request stop and run one final step to reattach bundles

@@ -107,12 +107,13 @@ impl DeadlineNs {
 /// Quality-of-Service class label attached to messages and used by admission.
 #[repr(u8)]
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum QoSClass {
     /// Latency-critical traffic; favored by EDF schedulers.
     LatencyCritical = 3,
 
     /// Default best-effort traffic.
+    #[default]
     BestEffort = 2,
 
     /// Background/low-priority traffic.

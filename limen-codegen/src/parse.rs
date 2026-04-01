@@ -226,27 +226,26 @@ impl Parse for GraphDef {
             }
         }
 
-        // Optional: concurrent;
-        let emit_concurrent = if !input.is_empty() {
-            let kw: Ident = input.parse()?;
-            if kw != "concurrent" {
+        // Optional trailing `concurrent;`
+        let mut emit_concurrent = false;
+        if !input.is_empty() {
+            let concurrent_kw: Ident = input.parse()?;
+            if concurrent_kw != "concurrent" {
                 return Err(syn::Error::new_spanned(
-                    kw,
-                    "expected `concurrent` or end of input",
+                    concurrent_kw,
+                    "expected `concurrent;`",
                 ));
             }
             input.parse::<Token![;]>()?;
-            true
-        } else {
-            false
-        };
+            emit_concurrent = true;
+        }
 
         Ok(GraphDef {
             vis,
             name,
+            emit_concurrent,
             nodes,
             edges,
-            emit_concurrent,
         })
     }
 }

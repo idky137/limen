@@ -173,6 +173,46 @@ pub trait Edge {
     }
 }
 
+/// Which role a scoped edge handle serves.
+///
+/// Arc-based edges (e.g. `ConcurrentEdge`) ignore this — the clone is
+/// full-duplex. Future lock-free split-handle edges (e.g. `SpscAtomicRing`)
+/// will return a producer-only or consumer-only handle depending on `kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeHandleKind {
+    /// Handle will be used to push messages (output side of a node).
+    Producer,
+    /// Handle will be used to pop messages (input side of a node).
+    Consumer,
+}
+
+/// Scoped handle factory for edges used in concurrent execution.
+///
+/// The GAT `Handle<'a>` allows implementations to return either:
+/// - An owned clone (Arc-based: `ConcurrentEdge`)
+/// - A borrowed split handle (future lock-free: producer or consumer view)
+///
+/// The lifetime `'a` is tied to `std::thread::scope` — all handles are
+/// guaranteed to be dropped before the scope exits.
+#[cfg(feature = "std")]
+pub trait ScopedEdge: Edge {
+    /// Per-worker handle type. Must implement `Edge + Send` so it can be
+    /// moved into a scoped thread and used for stepping.
+    type Handle<'a>: Edge + Send + 'a
+    where
+        Self: 'a;
+
+    /// Create a scoped handle for a worker thread.
+    ///
+    /// `kind` indicates whether the worker will use this handle as a
+    /// producer (push) or consumer (pop). Arc-based implementations may
+    /// ignore `kind`. Split-handle implementations use it to select the
+    /// correct half.
+    fn scoped_handle<'a>(&'a self, kind: EdgeHandleKind) -> Self::Handle<'a>
+    where
+        Self: 'a;
+}
+
 /// A no-op queue implementation used for phantom inputs and outputs.
 ///
 /// `NoQueue` acts as a placeholder in the graph where a queue is required by

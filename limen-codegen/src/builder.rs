@@ -298,18 +298,13 @@ impl GraphBuilder {
         self
     }
 
-    /// Select which graph flavor to emit.
+    /// Control whether to emit the std-only scoped execution API
+    /// (`ScopedGraphApi`) for the generated graph.
     ///
-    /// - `false` (default): emit only the non-`std` graph (`<Name>`).
-    /// - `true`: emit only the concurrent `std`-gated graph
-    ///   (`<Name>Std` inside `pub mod concurrent_graph`). Manager types
-    ///   must satisfy `Clone + Send + 'static` (e.g.
-    ///   `ConcurrentMemoryManager<P>`).
-    ///
-    /// To produce both flavors for the same topology, create two
-    /// `GraphBuilder` instances with distinct names.
-    pub fn concurrent(mut self, emit: bool) -> Self {
-        self.emit_concurrent = emit;
+    /// This does not change the graph structure. It only controls whether
+    /// codegen emits the extra `run_scoped(..)` implementation.
+    pub fn concurrent(mut self, emit_concurrent: bool) -> Self {
+        self.emit_concurrent = emit_concurrent;
         self
     }
 
@@ -326,9 +321,9 @@ impl GraphBuilder {
         ast::GraphDef {
             vis: self.vis.expect("visibility required"),
             name: self.name.expect("name required"),
+            emit_concurrent: self.emit_concurrent,
             nodes: self.nodes,
             edges: self.edges,
-            emit_concurrent: self.emit_concurrent,
         }
     }
 
@@ -338,9 +333,9 @@ impl GraphBuilder {
             g: ast::GraphDef {
                 vis: self.vis.expect("visibility required"),
                 name: self.name.expect("name required"),
+                emit_concurrent: self.emit_concurrent,
                 nodes: self.nodes,
                 edges: self.edges,
-                emit_concurrent: self.emit_concurrent,
             },
         }
     }

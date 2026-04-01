@@ -269,41 +269,6 @@ impl<SrcClk: PlatformClock> GraphApi<3, 3> for TestPipeline<SrcClk> {
             _ => unreachable!("invalid node index"),
         }
     }
-
-    // --- std-only required items: provide no-op stubs for the "no-std" test graph ---
-    #[cfg(feature = "std")]
-    type OwnedBundle = ();
-
-    #[cfg(feature = "std")]
-    #[inline]
-    fn take_owned_bundle_by_index(
-        &mut self,
-        _index: usize,
-    ) -> Result<Self::OwnedBundle, GraphError> {
-        // This graph doesn't support owned handoff; return an error so tests compile.
-        Err(GraphError::InvalidEdgeIndex)
-    }
-
-    #[cfg(feature = "std")]
-    #[inline]
-    fn put_owned_bundle_by_index(&mut self, _bundle: Self::OwnedBundle) -> Result<(), GraphError> {
-        // No-op; nothing was taken.
-        Ok(())
-    }
-
-    #[cfg(feature = "std")]
-    #[inline]
-    fn step_owned_bundle<C, T>(
-        _bundle: &mut Self::OwnedBundle,
-        _clock: &C,
-        _telemetry: &mut T,
-    ) -> Result<StepResult, NodeError>
-    where
-        EdgePolicy: Copy,
-    {
-        // Not supported for this graph; make it explicit.
-        Err(NodeError::execution_failed().with_code(1))
-    }
 }
 
 // ===== GraphNodeAccess<I> =====
@@ -817,21 +782,20 @@ where
     }
 }
 
-/// std graph implementation, for use by concurrent runtimes.
+/// std graph implementation using `ConcurrentEdge` — thread-safe, Clone+Send+Sync edges.
+///
+/// Topology mirrors `TestPipeline` (source → map → sink), but all real edges are
+/// `ConcurrentEdge` so `run_scoped` can hand clones to worker threads without wrapping.
 #[cfg(feature = "std")]
 pub mod concurrent_graph {
     use super::*;
 
     use crate::{
-        edge::{
-            link::ConcurrentEdgeLink,
-            spsc_concurrent::{ConcurrentQueue, ConsumerEndpoint, ProducerEndpoint},
-            EdgeOccupancy, NoQueue,
-        },
+        edge::{spsc_concurrent::ConcurrentEdge, EdgeOccupancy, NoQueue},
         errors::{GraphError, NodeError},
         graph::{
-            GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder,
-            GraphNodeOwnedEndpointHandoff, GraphNodeTypes,
+            GraphApi, GraphEdgeAccess, GraphNodeAccess, GraphNodeContextBuilder, GraphNodeTypes,
+            ScopedGraphApi,
         },
         node::{
             bench::{TestCounterSourceU32_2, TestIdentityModelNodeU32_2},
@@ -841,112 +805,71 @@ pub mod concurrent_graph {
             },
             StepContext, StepResult,
         },
-        policy::EdgePolicy,
+        policy::{EdgePolicy, WatermarkState},
         prelude::{
-            ConcurrentMemoryManager, EdgeDescriptor, NodeDescriptor, NodeLink, PlatformClock,
-            Telemetry,
+            ConcurrentMemoryManager, EdgeDescriptor, EdgeLink, NodeDescriptor, NodeLink,
+            PlatformClock, StaticMemoryManager, Telemetry, WorkerDecision, WorkerScheduler,
+            WorkerState,
         },
         types::{EdgeIndex, NodeIndex, PortId, PortIndex},
     };
 
-    // ===== Endpoint aliases used by nodes in this std graph =====
-    type InEpU32 = ConsumerEndpoint<ConcurrentQueue<Q32>>;
-    type OutEpU32 = ProducerEndpoint<ConcurrentQueue<Q32>>;
-
-    // Concurrent memory manager type (one per real edge).
     type ConcMgr32 = ConcurrentMemoryManager<u32>;
 
-    // Test source node types.
     #[allow(type_alias_bounds)]
-    type SrcNode<SrcClk: PlatformClock + std::marker::Send + 'static> =
+    type SrcNode<SrcClk: PlatformClock + Send + 'static> =
         SourceNode<TestCounterSourceU32_2<SrcClk, 32>, u32, 1>;
 
-    // Test model node types.
     const TEST_MAX_BATCH: usize = 32;
     type MapNode = TestIdentityModelNodeU32_2<TEST_MAX_BATCH>;
-
-    // Test sink node types.
     type SnkNode = SinkNode<TestSinkNodeU32_2, u32, 1>;
 
-    /// concrete graph implementation (std / concurrent).
+    /// Concrete std graph using `ConcurrentEdge` (Arc-backed, Clone+Send+Sync).
     #[allow(clippy::complexity)]
-    pub struct TestPipelineStd<SrcClk: PlatformClock + std::marker::Send + 'static> {
-        // Nodes. We keep them as Options to support "move-out" for owned handoff.
+    pub struct TestPipelineStd<SrcClk: PlatformClock + Send + 'static> {
         nodes: (
-            Option<NodeLink<SrcNode<SrcClk>, 0, 1, (), u32>>,
-            Option<NodeLink<MapNode, 1, 1, u32, u32>>,
-            Option<NodeLink<SnkNode, 1, 0, u32, ()>>,
+            NodeLink<SrcNode<SrcClk>, 0, 1, (), u32>,
+            NodeLink<MapNode, 1, 1, u32, u32>,
+            NodeLink<SnkNode, 1, 0, u32, ()>,
         ),
-        // Edges: one Arc<Mutex<_>> each + metadata.
-        edges: (
-            ConcurrentEdgeLink<Q32>, // e0: 0->1
-            ConcurrentEdgeLink<Q32>, // e1: 1->2
-        ),
-        // Persistent endpoint views (borrowed path uses &mut to these).
-        // Each edge has a consumer (downstream side) and a producer (upstream side).
-        endpoints: (
-            (InEpU32, OutEpU32), // e0: (to node1 in0, from node0 out0)
-            (InEpU32, OutEpU32), // e1: (to node2 in0, from node1 out0)
-        ),
-        // Synthetic ingress edges (ids [0..S)), backed by atomic probes. S = 1 here.
+        edges: (EdgeLink<ConcurrentEdge>, EdgeLink<ConcurrentEdge>),
         ingress_edges: [ConcurrentIngressEdgeLink<u32>; 1],
-        // One updater per source; moved to that source worker; kept as Option so we can take().
         ingress_updaters: [Option<SourceIngressUpdater>; 1],
-        // Cache node descriptors so validation still works after nodes are moved out.
-        node_descs: [NodeDescriptor; 3],
-        // Cache node policies so get_node_policies still works after nodes are moved out.
-        node_policies: [NodePolicy; 3],
-        /// Memory managers for all *real* edges in declaration order.
         managers: (ConcMgr32, ConcMgr32),
     }
 
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> TestPipelineStd<SrcClk> {
-        /// Build the std graph from nodes and concrete queues.
+    impl<SrcClk: PlatformClock + Send + 'static> TestPipelineStd<SrcClk> {
+        /// Create a new TestPipelineStd from given nodes, edges and memory managers.
         #[inline]
         pub fn new(
             node_0: impl Into<SrcNode<SrcClk>>,
             node_1: MapNode,
             node_2: impl Into<SnkNode>,
-            q_0: Q32,
-            q_1: Q32,
+            q_0: ConcurrentEdge,
+            q_1: ConcurrentEdge,
+            mgr_0: ConcMgr32,
             mgr_1: ConcMgr32,
-            mgr_2: ConcMgr32,
         ) -> Self {
-            // Build nodes
             let node_0: SrcNode<SrcClk> = node_0.into();
             let node_2: SnkNode = node_2.into();
 
-            let node_0_link = NodeLink::<SrcNode<SrcClk>, 0, 1, (), u32>::new(
+            let n0 = NodeLink::<SrcNode<SrcClk>, 0, 1, (), u32>::new(
                 node_0,
                 NodeIndex::from(0usize),
                 Some("src"),
             );
-            let node_1_link = NodeLink::<MapNode, 1, 1, u32, u32>::new(
+            let n1 = NodeLink::<MapNode, 1, 1, u32, u32>::new(
                 node_1,
                 NodeIndex::from(1usize),
                 Some("map"),
             );
-            let node_2_link = NodeLink::<SnkNode, 1, 0, u32, ()>::new(
+            let n2 = NodeLink::<SnkNode, 1, 0, u32, ()>::new(
                 node_2,
                 NodeIndex::from(2usize),
                 Some("snk"),
             );
 
-            let node_descs = [
-                node_0_link.descriptor(),
-                node_1_link.descriptor(),
-                node_2_link.descriptor(),
-            ];
-            let node_policies = [
-                node_0_link.policy(),
-                node_1_link.policy(),
-                node_2_link.policy(),
-            ];
-
-            let nodes = (Some(node_0_link), Some(node_1_link), Some(node_2_link));
-
-            // Build edges
-            let e0 = ConcurrentEdgeLink::<Q32>::new(
+            let e0 = EdgeLink::new(
                 q_0,
                 EdgeIndex::from(1usize),
                 PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
@@ -954,7 +877,7 @@ pub mod concurrent_graph {
                 Q_32_POLICY,
                 Some("e0"),
             );
-            let e1 = ConcurrentEdgeLink::<Q32>::new(
+            let e1 = EdgeLink::new(
                 q_1,
                 EdgeIndex::from(2usize),
                 PortId::new(NodeIndex::from(1usize), PortIndex::from(0)),
@@ -963,97 +886,300 @@ pub mod concurrent_graph {
                 Some("e1"),
             );
 
-            // Mint persistent endpoints from the Arcs.
-            let endpoints = {
-                // e0 endpoints
-                let c0 = ConcurrentQueue::from_arc(e0.arc());
-                let p0 = ConcurrentQueue::from_arc(e0.arc());
-                let e0_cons = InEpU32::new(c0);
-                let e0_prod = OutEpU32::new(p0);
-                // e1 endpoints
-                let c1 = ConcurrentQueue::from_arc(e1.arc());
-                let p1 = ConcurrentQueue::from_arc(e1.arc());
-                let e1_cons = InEpU32::new(c1);
-                let e1_prod = OutEpU32::new(p1);
-
-                ((e0_cons, e0_prod), (e1_cons, e1_prod))
-            };
-
-            // Ingress probe(s): typed edge(s) held by graph + updater(s) moved to source worker(s)
             let (probe_edge_0, updater_0) = new_probe_edge_pair::<u32>();
             let ingress_edge_0 = ConcurrentIngressEdgeLink::from_probe(
                 probe_edge_0,
                 EdgeIndex::from(0usize),
                 PortId::new(EXTERNAL_INGRESS_NODE, PortIndex::from(0)),
                 PortId::new(NodeIndex::from(0usize), PortIndex::from(0)),
-                nodes
-                    .0
-                    .as_ref()
-                    .unwrap()
-                    .node()
-                    .source_ref()
-                    .ingress_policy(),
+                n0.node().source_ref().ingress_policy(),
                 Some("ingress0"),
             );
-            let ingress_edges = [ingress_edge_0];
-            let ingress_updaters = [Some(updater_0)];
-
-            let managers = (mgr_1, mgr_2);
 
             Self {
-                nodes,
+                nodes: (n0, n1, n2),
                 edges: (e0, e1),
-                endpoints,
-                ingress_edges,
-                ingress_updaters,
-                node_descs,
-                node_policies,
-                managers,
+                ingress_edges: [ingress_edge_0],
+                ingress_updaters: [Some(updater_0)],
+                managers: (mgr_0, mgr_1),
             }
+        }
+
+        /// Take the ingress updater for source 0, moving it to the worker thread.
+        /// Returns `None` if already taken.
+        #[inline]
+        pub fn take_ingress_updater_0(&mut self) -> Option<SourceIngressUpdater> {
+            self.ingress_updaters[0].take()
+        }
+
+        /// Run the graph concurrently using `std::thread::scope` with
+        /// scheduler-controlled workers.
+        ///
+        /// Spawns one thread per node. Each worker queries edge occupancy,
+        /// builds a [`WorkerState`] snapshot, and calls `scheduler.decide()`
+        /// to get stepping instructions. All threads join when scope exits.
+        fn run_scoped_impl<C, T, S>(&mut self, clock: C, telemetry: T, scheduler: S)
+        where
+            C: PlatformClock + Clone + Send + Sync + 'static,
+            T: Telemetry + Clone + Send + 'static,
+            S: WorkerScheduler + 'static,
+            SrcNode<SrcClk>: Send,
+            MapNode: Send,
+            SnkNode: Send,
+        {
+            let pol0 = *self.edges.0.policy();
+            let pol1 = *self.edges.1.policy();
+
+            // Clone edges (ConcurrentEdge: Clone via Arc).
+            let e0_out = self.edges.0.queue().clone();
+            let e0_in = self.edges.0.queue().clone();
+            let e1_out = self.edges.1.queue().clone();
+            let e1_in = self.edges.1.queue().clone();
+
+            // Clone managers (ConcurrentMemoryManager: Clone).
+            let mgr0_n0 = self.managers.0.clone();
+            let mgr0_n1 = self.managers.0.clone();
+            let mgr1_n1 = self.managers.1.clone();
+            let mgr1_n2 = self.managers.1.clone();
+
+            // Clone telemetry.
+            let telem0 = telemetry.clone();
+            let telem1 = telemetry.clone();
+            let telem2 = telemetry;
+
+            // Ingress updater for node 0 (probe reports source depth to scheduler).
+            let updater_0 = self.ingress_updaters[0]
+                .as_ref()
+                .expect("ingress updater missing")
+                .clone();
+
+            // Disjoint node borrows — Rust tracks tuple fields as separate locations.
+            let n0 = &mut self.nodes.0;
+            let n1 = &mut self.nodes.1;
+            let n2 = &mut self.nodes.2;
+
+            let clock_ref = &clock;
+            let sched_ref = &scheduler;
+
+            std::thread::scope(|scope| {
+                // --- Node 0: source (readiness from ingress_occupancy) ---
+                {
+                    let mut e0_out = e0_out;
+                    let mut mgr = mgr0_n0;
+                    let mut telem = telem0;
+                    scope.spawn(move || {
+                        let mut state = WorkerState::new(0, 3, clock_ref.now_ticks());
+                        loop {
+                            state.current_tick = clock_ref.now_ticks();
+
+                            // Source node: readiness from ingress occupancy.
+                            let ingress_occ = n0.node().source_ref().ingress_occupancy();
+                            let any_input = *ingress_occ.items() > 0;
+
+                            // Output backpressure from edge 0.
+                            let out_occ = e0_out.occupancy(&pol0);
+                            state.backpressure = *out_occ.watermark();
+
+                            state.readiness = if !any_input {
+                                crate::scheduling::Readiness::NotReady
+                            } else if state.backpressure >= WatermarkState::BetweenSoftAndHard {
+                                crate::scheduling::Readiness::ReadyUnderPressure
+                            } else {
+                                crate::scheduling::Readiness::Ready
+                            };
+
+                            match sched_ref.decide(&state) {
+                                WorkerDecision::Step => {
+                                    let mut ctx = StepContext::new(
+                                        [] as [&mut NoQueue; 0],
+                                        [&mut e0_out],
+                                        [] as [&mut StaticMemoryManager<(), 1>; 0],
+                                        [&mut mgr],
+                                        [] as [EdgePolicy; 0],
+                                        [pol0],
+                                        0u32,
+                                        [] as [u32; 0],
+                                        [1u32],
+                                        clock_ref,
+                                        &mut telem,
+                                    );
+                                    match n0.step(&mut ctx) {
+                                        Ok(sr) => {
+                                            state.last_step = Some(sr);
+                                            state.last_error = false;
+                                        }
+                                        Err(_) => {
+                                            state.last_step = None;
+                                            state.last_error = true;
+                                        }
+                                    }
+                                    // Update ingress probe for cross-thread visibility.
+                                    let occ = n0.node().source_ref().ingress_occupancy();
+                                    updater_0.update(*occ.items(), *occ.bytes());
+                                }
+                                WorkerDecision::WaitMicros(d) => {
+                                    std::thread::sleep(std::time::Duration::from_micros(d));
+                                    state.last_step = None;
+                                    state.last_error = false;
+                                }
+                                WorkerDecision::Stop => break,
+                            }
+                        }
+                    });
+                }
+
+                // --- Node 1: map (readiness from input edge 0) ---
+                {
+                    let mut e0_in = e0_in;
+                    let mut e1_out = e1_out;
+                    let mut mgr_in = mgr0_n1;
+                    let mut mgr_out = mgr1_n1;
+                    let mut telem = telem1;
+                    scope.spawn(move || {
+                        let mut state = WorkerState::new(1, 3, clock_ref.now_ticks());
+                        loop {
+                            state.current_tick = clock_ref.now_ticks();
+
+                            // Input readiness from edge 0.
+                            let in_occ = e0_in.occupancy(&pol0);
+                            let any_input = *in_occ.items() > 0;
+
+                            // Output backpressure from edge 1.
+                            let out_occ = e1_out.occupancy(&pol1);
+                            state.backpressure = *out_occ.watermark();
+
+                            state.readiness = if !any_input {
+                                crate::scheduling::Readiness::NotReady
+                            } else if state.backpressure >= WatermarkState::BetweenSoftAndHard {
+                                crate::scheduling::Readiness::ReadyUnderPressure
+                            } else {
+                                crate::scheduling::Readiness::Ready
+                            };
+
+                            match sched_ref.decide(&state) {
+                                WorkerDecision::Step => {
+                                    let mut ctx = StepContext::new(
+                                        [&mut e0_in],
+                                        [&mut e1_out],
+                                        [&mut mgr_in],
+                                        [&mut mgr_out],
+                                        [pol0],
+                                        [pol1],
+                                        1u32,
+                                        [1u32],
+                                        [2u32],
+                                        clock_ref,
+                                        &mut telem,
+                                    );
+                                    match n1.step(&mut ctx) {
+                                        Ok(sr) => {
+                                            state.last_step = Some(sr);
+                                            state.last_error = false;
+                                        }
+                                        Err(_) => {
+                                            state.last_step = None;
+                                            state.last_error = true;
+                                        }
+                                    }
+                                }
+                                WorkerDecision::WaitMicros(d) => {
+                                    std::thread::sleep(std::time::Duration::from_micros(d));
+                                    state.last_step = None;
+                                    state.last_error = false;
+                                }
+                                WorkerDecision::Stop => break,
+                            }
+                        }
+                    });
+                }
+
+                // --- Node 2: sink (readiness from input edge 1, no outputs) ---
+                {
+                    let mut e1_in = e1_in;
+                    let mut mgr = mgr1_n2;
+                    let mut telem = telem2;
+                    scope.spawn(move || {
+                        let mut state = WorkerState::new(2, 3, clock_ref.now_ticks());
+                        loop {
+                            state.current_tick = clock_ref.now_ticks();
+
+                            // Input readiness from edge 1.
+                            let in_occ = e1_in.occupancy(&pol1);
+                            let any_input = *in_occ.items() > 0;
+
+                            // Sink has no outputs — no backpressure.
+
+                            state.readiness = if !any_input {
+                                crate::scheduling::Readiness::NotReady
+                            } else {
+                                crate::scheduling::Readiness::Ready
+                            };
+
+                            match sched_ref.decide(&state) {
+                                WorkerDecision::Step => {
+                                    let mut ctx = StepContext::new(
+                                        [&mut e1_in],
+                                        [] as [&mut NoQueue; 0],
+                                        [&mut mgr],
+                                        [] as [&mut StaticMemoryManager<(), 1>; 0],
+                                        [pol1],
+                                        [] as [EdgePolicy; 0],
+                                        2u32,
+                                        [2u32],
+                                        [] as [u32; 0],
+                                        clock_ref,
+                                        &mut telem,
+                                    );
+                                    match n2.step(&mut ctx) {
+                                        Ok(sr) => {
+                                            state.last_step = Some(sr);
+                                            state.last_error = false;
+                                        }
+                                        Err(_) => {
+                                            state.last_step = None;
+                                            state.last_error = true;
+                                        }
+                                    }
+                                }
+                                WorkerDecision::WaitMicros(d) => {
+                                    std::thread::sleep(std::time::Duration::from_micros(d));
+                                    state.last_step = None;
+                                    state.last_error = false;
+                                }
+                                WorkerDecision::Stop => break,
+                            }
+                        }
+                    });
+                }
+            });
         }
     }
 
-    /// ===== std-only opaque owned-bundle used by GraphApi take/put =====
-    #[allow(clippy::large_enum_variant)]
-    #[allow(missing_docs)]
-    pub enum TestPipelineStdOwnedBundle<SrcClk: PlatformClock + std::marker::Send + 'static> {
-        N0 {
-            node: NodeLink<SrcNode<SrcClk>, 0, 1, (), u32>,
-            ins: [NoQueue; 0],
-            outs: [OutEpU32; 1],
-            in_managers: [StaticMemoryManager<(), 1>; 0],
-            out_managers: [ConcMgr32; 1],
-            in_policies: [EdgePolicy; 0],
-            out_policies: [EdgePolicy; 1],
-            ingress_updater: SourceIngressUpdater,
-        },
-        N1 {
-            node: NodeLink<MapNode, 1, 1, u32, u32>,
-            ins: [InEpU32; 1],
-            outs: [OutEpU32; 1],
-            in_managers: [ConcMgr32; 1],
-            out_managers: [ConcMgr32; 1],
-            in_policies: [EdgePolicy; 1],
-            out_policies: [EdgePolicy; 1],
-        },
-        N2 {
-            node: NodeLink<SnkNode, 1, 0, u32, ()>,
-            ins: [InEpU32; 1],
-            outs: [NoQueue; 0],
-            in_managers: [ConcMgr32; 1],
-            out_managers: [StaticMemoryManager<(), 1>; 0],
-            in_policies: [EdgePolicy; 1],
-            out_policies: [EdgePolicy; 0],
-        },
+    // ===== ScopedGraphApi<3, 3> =====
+    impl<SrcClk: PlatformClock + Clone + Send + Sync + 'static> ScopedGraphApi<3, 3>
+        for TestPipelineStd<SrcClk>
+    where
+        SrcNode<SrcClk>: Send,
+    {
+        fn run_scoped<C, T, S>(&mut self, clock: C, telemetry: T, scheduler: S)
+        where
+            C: PlatformClock + Clone + Send + Sync + 'static,
+            T: Telemetry + Clone + Send + 'static,
+            S: WorkerScheduler + 'static,
+        {
+            self.run_scoped_impl(clock, telemetry, scheduler)
+        }
     }
 
-    // ===== GraphApi<3,3> =====
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphApi<3, 3>
-        for TestPipelineStd<SrcClk>
-    {
+    // ===== GraphApi<3, 3> =====
+    impl<SrcClk: PlatformClock + Send + 'static> GraphApi<3, 3> for TestPipelineStd<SrcClk> {
         #[inline]
         fn get_node_descriptors(&self) -> [NodeDescriptor; 3] {
-            self.node_descs.clone()
+            [
+                self.nodes.0.descriptor(),
+                self.nodes.1.descriptor(),
+                self.nodes.2.descriptor(),
+            ]
         }
 
         #[inline]
@@ -1067,19 +1193,17 @@ pub mod concurrent_graph {
 
         #[inline]
         fn get_node_policies(&self) -> [NodePolicy; 3] {
-            self.node_policies
+            [
+                self.nodes.0.policy(),
+                self.nodes.1.policy(),
+                self.nodes.2.policy(),
+            ]
         }
 
         #[inline]
         fn get_edge_policies(&self) -> [EdgePolicy; 3] {
             [
-                self.nodes
-                    .0
-                    .as_ref()
-                    .unwrap()
-                    .node()
-                    .source_ref()
-                    .ingress_policy(),
+                self.nodes.0.node().source_ref().ingress_policy(),
                 *self.edges.0.policy(),
                 *self.edges.1.policy(),
             ]
@@ -1088,10 +1212,7 @@ pub mod concurrent_graph {
         #[inline]
         fn edge_occupancy_for<const E: usize>(&self) -> Result<EdgeOccupancy, GraphError> {
             let occ = match E {
-                0 => {
-                    // synthetic ingress: read atomic probe
-                    self.ingress_edges[0].occupancy(&self.ingress_edges[0].policy())
-                }
+                0 => self.ingress_edges[0].occupancy(&self.ingress_edges[0].policy()),
                 1 => {
                     let e = &self.edges.0;
                     e.occupancy(e.policy())
@@ -1124,7 +1245,7 @@ pub mod concurrent_graph {
             let node_idx = NodeIndex::from(I);
             for ed in self.get_edge_descriptors().iter() {
                 if ed.upstream().node() == &node_idx || ed.downstream().node() == &node_idx {
-                    match (ed.id()).as_usize() {
+                    match ed.id().as_usize() {
                         0 => out[0] = self.edge_occupancy_for::<0>()?,
                         1 => out[1] = self.edge_occupancy_for::<1>()?,
                         2 => out[2] = self.edge_occupancy_for::<2>()?,
@@ -1169,281 +1290,46 @@ pub mod concurrent_graph {
                 _ => unreachable!("invalid node index"),
             }
         }
-
-        type OwnedBundle = TestPipelineStdOwnedBundle<SrcClk>;
-
-        #[cfg(feature = "std")]
-        fn take_owned_bundle_by_index(
-            &mut self,
-            index: usize,
-        ) -> Result<Self::OwnedBundle, GraphError> {
-            match index {
-                0 => {
-                    let node = self.nodes.0.take().ok_or(GraphError::InvalidEdgeIndex)?;
-                    let ingress_updater = self.ingress_updaters[0]
-                        .take()
-                        .expect("ingress updater already taken");
-                    Ok(TestPipelineStdOwnedBundle::N0 {
-                        node,
-                        ins: [],
-                        outs: [(self.endpoints.0).1.clone()],
-                        in_managers: [],
-                        out_managers: [self.managers.0.clone()],
-                        in_policies: [],
-                        out_policies: [*self.edges.0.policy()],
-                        ingress_updater,
-                    })
-                }
-                1 => {
-                    let node = self.nodes.1.take().ok_or(GraphError::InvalidEdgeIndex)?;
-                    Ok(TestPipelineStdOwnedBundle::N1 {
-                        node,
-                        ins: [(self.endpoints.0).0.clone()],
-                        outs: [(self.endpoints.1).1.clone()],
-                        in_managers: [self.managers.0.clone()],
-                        out_managers: [self.managers.1.clone()],
-                        in_policies: [*self.edges.0.policy()],
-                        out_policies: [*self.edges.1.policy()],
-                    })
-                }
-                2 => {
-                    let node = self.nodes.2.take().ok_or(GraphError::InvalidEdgeIndex)?;
-                    Ok(TestPipelineStdOwnedBundle::N2 {
-                        node,
-                        ins: [(self.endpoints.1).0.clone()],
-                        outs: [],
-                        in_managers: [self.managers.1.clone()],
-                        out_managers: [],
-                        in_policies: [*self.edges.1.policy()],
-                        out_policies: [],
-                    })
-                }
-                _ => Err(GraphError::InvalidEdgeIndex),
-            }
-        }
-
-        #[cfg(feature = "std")]
-        fn put_owned_bundle_by_index(
-            &mut self,
-            bundle: Self::OwnedBundle,
-        ) -> Result<(), GraphError> {
-            match bundle {
-                TestPipelineStdOwnedBundle::N0 {
-                    node,
-                    ins: _,
-                    outs,
-                    in_managers: _,
-                    out_managers,
-                    in_policies: _,
-                    out_policies: _,
-                    ingress_updater,
-                } => {
-                    assert!(self.nodes.0.is_none(), "node 0 already present");
-                    self.nodes.0 = Some(node);
-                    (self.endpoints.0).1 = outs[0].clone();
-                    self.managers.0 = out_managers[0].clone();
-                    self.ingress_updaters[0] = Some(ingress_updater);
-                    Ok(())
-                }
-                TestPipelineStdOwnedBundle::N1 {
-                    node,
-                    ins,
-                    outs,
-                    in_managers,
-                    out_managers,
-                    in_policies: _,
-                    out_policies: _,
-                } => {
-                    assert!(self.nodes.1.is_none(), "node 1 already present");
-                    self.nodes.1 = Some(node);
-                    (self.endpoints.0).0 = ins[0].clone();
-                    (self.endpoints.1).1 = outs[0].clone();
-                    self.managers.0 = in_managers[0].clone();
-                    self.managers.1 = out_managers[0].clone();
-                    Ok(())
-                }
-                TestPipelineStdOwnedBundle::N2 {
-                    node,
-                    ins,
-                    outs: _,
-                    in_managers,
-                    out_managers: _,
-                    in_policies: _,
-                    out_policies: _,
-                } => {
-                    assert!(self.nodes.2.is_none(), "node 2 already present");
-                    self.nodes.2 = Some(node);
-                    (self.endpoints.1).0 = ins[0].clone();
-                    self.managers.1 = in_managers[0].clone();
-                    Ok(())
-                }
-            }
-        }
-
-        #[cfg(feature = "std")]
-        #[inline]
-        fn step_owned_bundle<C, T>(
-            bundle: &mut Self::OwnedBundle,
-            clock: &C,
-            telemetry: &mut T,
-        ) -> Result<StepResult, NodeError>
-        where
-            EdgePolicy: Copy,
-            C: PlatformClock + Sized,
-            T: Telemetry + Sized,
-        {
-            match bundle {
-                TestPipelineStdOwnedBundle::N0 {
-                    node,
-                    ins: _,
-                    outs,
-                    in_managers: _,
-                    out_managers,
-                    in_policies,
-                    out_policies,
-                    ingress_updater,
-                } => {
-                    let occ = node.node().source_ref().ingress_occupancy();
-                    ingress_updater.update(*occ.items(), *occ.bytes());
-
-                    let inputs: [&mut NoQueue; 0] = [];
-                    let outputs: [&mut OutEpU32; 1] = [&mut outs[0]];
-                    let in_mgr_arr: [&mut StaticMemoryManager<(), 1>; 0] = [];
-                    let out_mgr_arr: [&mut ConcMgr32; 1] = [&mut out_managers[0]];
-                    let node_id: u32 = 0;
-                    let in_edge_ids: [u32; 0] = [];
-                    let out_edge_ids: [u32; 1] = [1];
-
-                    let mut ctx = crate::node::StepContext::new(
-                        inputs,
-                        outputs,
-                        in_mgr_arr,
-                        out_mgr_arr,
-                        *in_policies,
-                        *out_policies,
-                        node_id,
-                        in_edge_ids,
-                        out_edge_ids,
-                        clock,
-                        telemetry,
-                    );
-                    node.step(&mut ctx)
-                }
-                TestPipelineStdOwnedBundle::N1 {
-                    node,
-                    ins,
-                    outs,
-                    in_managers,
-                    out_managers,
-                    in_policies,
-                    out_policies,
-                } => {
-                    let inputs: [&mut InEpU32; 1] = [&mut ins[0]];
-                    let outputs: [&mut OutEpU32; 1] = [&mut outs[0]];
-                    let in_mgr_arr: [&mut ConcMgr32; 1] = [&mut in_managers[0]];
-                    let out_mgr_arr: [&mut ConcMgr32; 1] = [&mut out_managers[0]];
-                    let node_id: u32 = 1;
-                    let in_edge_ids: [u32; 1] = [1];
-                    let out_edge_ids: [u32; 1] = [2];
-
-                    let mut ctx = crate::node::StepContext::new(
-                        inputs,
-                        outputs,
-                        in_mgr_arr,
-                        out_mgr_arr,
-                        *in_policies,
-                        *out_policies,
-                        node_id,
-                        in_edge_ids,
-                        out_edge_ids,
-                        clock,
-                        telemetry,
-                    );
-                    node.step(&mut ctx)
-                }
-                TestPipelineStdOwnedBundle::N2 {
-                    node,
-                    ins,
-                    outs: _,
-                    in_managers,
-                    out_managers: _,
-                    in_policies,
-                    out_policies,
-                } => {
-                    let inputs: [&mut InEpU32; 1] = [&mut ins[0]];
-                    let outputs: [&mut NoQueue; 0] = [];
-                    let in_mgr_arr: [&mut ConcMgr32; 1] = [&mut in_managers[0]];
-                    let out_mgr_arr: [&mut StaticMemoryManager<(), 1>; 0] = [];
-                    let node_id: u32 = 2;
-                    let in_edge_ids: [u32; 1] = [2];
-                    let out_edge_ids: [u32; 0] = [];
-
-                    let mut ctx = crate::node::StepContext::new(
-                        inputs,
-                        outputs,
-                        in_mgr_arr,
-                        out_mgr_arr,
-                        *in_policies,
-                        *out_policies,
-                        node_id,
-                        in_edge_ids,
-                        out_edge_ids,
-                        clock,
-                        telemetry,
-                    );
-                    node.step(&mut ctx)
-                }
-            }
-        }
     }
 
     // ===== GraphNodeAccess<I> =====
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeAccess<0>
-        for TestPipelineStd<SrcClk>
-    {
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeAccess<0> for TestPipelineStd<SrcClk> {
         type Node = NodeLink<SrcNode<SrcClk>, 0, 1, (), u32>;
         #[inline]
         fn node_ref(&self) -> &Self::Node {
-            self.nodes.0.as_ref().expect("node 0 moved")
+            &self.nodes.0
         }
         #[inline]
         fn node_mut(&mut self) -> &mut Self::Node {
-            self.nodes.0.as_mut().expect("node 0 moved")
+            &mut self.nodes.0
         }
     }
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeAccess<1>
-        for TestPipelineStd<SrcClk>
-    {
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeAccess<1> for TestPipelineStd<SrcClk> {
         type Node = NodeLink<MapNode, 1, 1, u32, u32>;
         #[inline]
         fn node_ref(&self) -> &Self::Node {
-            self.nodes.1.as_ref().expect("node 1 moved")
+            &self.nodes.1
         }
         #[inline]
         fn node_mut(&mut self) -> &mut Self::Node {
-            self.nodes.1.as_mut().expect("node 1 moved")
+            &mut self.nodes.1
         }
     }
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeAccess<2>
-        for TestPipelineStd<SrcClk>
-    {
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeAccess<2> for TestPipelineStd<SrcClk> {
         type Node = NodeLink<SnkNode, 1, 0, u32, ()>;
         #[inline]
         fn node_ref(&self) -> &Self::Node {
-            self.nodes.2.as_ref().expect("node 2 moved")
+            &self.nodes.2
         }
         #[inline]
         fn node_mut(&mut self) -> &mut Self::Node {
-            self.nodes.2.as_mut().expect("node 2 moved")
+            &mut self.nodes.2
         }
     }
 
     // ===== GraphEdgeAccess<E> =====
-    // We expose our StdEdge; runtimes/tooling can still read descriptors/policies.
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphEdgeAccess<1>
-        for TestPipelineStd<SrcClk>
-    {
-        type Edge = ConcurrentEdgeLink<Q32>;
+    impl<SrcClk: PlatformClock + Send + 'static> GraphEdgeAccess<1> for TestPipelineStd<SrcClk> {
+        type Edge = EdgeLink<ConcurrentEdge>;
         #[inline]
         fn edge_ref(&self) -> &Self::Edge {
             &self.edges.0
@@ -1453,10 +1339,8 @@ pub mod concurrent_graph {
             &mut self.edges.0
         }
     }
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphEdgeAccess<2>
-        for TestPipelineStd<SrcClk>
-    {
-        type Edge = ConcurrentEdgeLink<Q32>;
+    impl<SrcClk: PlatformClock + Send + 'static> GraphEdgeAccess<2> for TestPipelineStd<SrcClk> {
+        type Edge = EdgeLink<ConcurrentEdge>;
         #[inline]
         fn edge_ref(&self) -> &Self::Edge {
             &self.edges.1
@@ -1468,48 +1352,35 @@ pub mod concurrent_graph {
     }
 
     // ===== GraphNodeTypes<I, IN, OUT> =====
-    // node 0: IN=0, OUT=1  (src)
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeTypes<0, 0, 1>
-        for TestPipelineStd<SrcClk>
-    {
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeTypes<0, 0, 1> for TestPipelineStd<SrcClk> {
         type InP = ();
         type OutP = u32;
         type InQ = NoQueue;
-        type OutQ = OutEpU32;
+        type OutQ = ConcurrentEdge;
         type InM = StaticMemoryManager<(), 1>;
         type OutM = ConcMgr32;
     }
-    // node 1: IN=1, OUT=1  (map)
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeTypes<1, 1, 1>
-        for TestPipelineStd<SrcClk>
-    {
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeTypes<1, 1, 1> for TestPipelineStd<SrcClk> {
         type InP = u32;
         type OutP = u32;
-        type InQ = InEpU32;
-        type OutQ = OutEpU32;
+        type InQ = ConcurrentEdge;
+        type OutQ = ConcurrentEdge;
         type InM = ConcMgr32;
         type OutM = ConcMgr32;
     }
-    // node 2: IN=1, OUT=0  (snk)
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeTypes<2, 1, 0>
-        for TestPipelineStd<SrcClk>
-    {
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeTypes<2, 1, 0> for TestPipelineStd<SrcClk> {
         type InP = u32;
         type OutP = ();
-        type InQ = InEpU32;
+        type InQ = ConcurrentEdge;
         type OutQ = NoQueue;
         type InM = ConcMgr32;
         type OutM = StaticMemoryManager<(), 1>;
     }
 
     // ===== GraphNodeContextBuilder<I, IN, OUT> =====
-    //
-    // We implement ONLY the borrowed handoff method here (the runtime should call it).
-    // If you still want `make_step_context(..)` as well, you can add it by borrowing
-    // these same endpoint fields; the borrowed method is the key to avoid borrow overlap.
 
-    // node 0: in=[], out=[edge id 1]
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeContextBuilder<0, 0, 1>
+    // node 0: in=[], out=[e0]
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeContextBuilder<0, 0, 1>
         for TestPipelineStd<SrcClk>
     where
         Self: GraphNodeAccess<0, Node = NodeLink<SrcNode<SrcClk>, 0, 1, (), u32>>,
@@ -1540,32 +1411,16 @@ pub mod concurrent_graph {
             T: Telemetry + Sized,
         {
             let out0_policy = *self.edges.0.policy();
-
-            let inputs: [&'graph mut <Self as GraphNodeTypes<0, 0, 1>>::InQ; 0] = [];
-            let outputs: [&'graph mut <Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1] =
-                [&mut (self.endpoints.0).1];
-
-            let in_managers: [&'graph mut <Self as GraphNodeTypes<0, 0, 1>>::InM; 0] = [];
-            let out_managers: [&'graph mut <Self as GraphNodeTypes<0, 0, 1>>::OutM; 1] =
-                [&mut self.managers.0];
-
-            let in_policies: [EdgePolicy; 0] = [/* empty */];
-            let out_policies: [EdgePolicy; 1] = [out0_policy];
-
-            let node_id: u32 = 0;
-            let in_edge_ids: [u32; 0] = [/* empty */];
-            let out_edge_ids: [u32; 1] = [1];
-
             StepContext::new(
-                inputs,
-                outputs,
-                in_managers,
-                out_managers,
-                in_policies,
-                out_policies,
-                node_id,
-                in_edge_ids,
-                out_edge_ids,
+                [],
+                [self.edges.0.queue_mut()],
+                [],
+                [&mut self.managers.0],
+                [],
+                [out0_policy],
+                0u32,
+                [],
+                [1u32],
                 clock,
                 telemetry,
             )
@@ -1601,34 +1456,20 @@ pub mod concurrent_graph {
             C: PlatformClock + Sized,
             T: Telemetry + Sized,
         {
-            let node = self.nodes.0.as_mut().expect("node 0 moved");
+            let node = &mut self.nodes.0;
             let out0_policy = *self.edges.0.policy();
-
-            let inputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::InQ; 0] = [];
-            let outputs: [&mut <Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1] =
-                [&mut (self.endpoints.0).1];
-
-            let in_managers: [&mut <Self as GraphNodeTypes<0, 0, 1>>::InM; 0] = [];
-            let out_managers: [&mut <Self as GraphNodeTypes<0, 0, 1>>::OutM; 1] =
-                [&mut self.managers.0];
-
-            let in_policies: [EdgePolicy; 0] = [/* empty */];
-            let out_policies: [EdgePolicy; 1] = [out0_policy];
-
-            let node_id: u32 = 0;
-            let in_edge_ids: [u32; 0] = [/* empty */];
-            let out_edge_ids: [u32; 1] = [1];
-
+            let outputs = [self.edges.0.queue_mut()];
+            let out_managers = [&mut self.managers.0];
             let mut ctx = StepContext::new(
-                inputs,
+                [],
                 outputs,
-                in_managers,
+                [],
                 out_managers,
-                in_policies,
-                out_policies,
-                node_id,
-                in_edge_ids,
-                out_edge_ids,
+                [],
+                [out0_policy],
+                0u32,
+                [],
+                [1u32],
                 clock,
                 telemetry,
             );
@@ -1636,8 +1477,8 @@ pub mod concurrent_graph {
         }
     }
 
-    // node 1: in=[edge id 1], out=[edge id 2]
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeContextBuilder<1, 1, 1>
+    // node 1: in=[e0], out=[e1]
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeContextBuilder<1, 1, 1>
         for TestPipelineStd<SrcClk>
     where
         Self: GraphNodeAccess<1, Node = NodeLink<MapNode, 1, 1, u32, u32>>,
@@ -1669,34 +1510,16 @@ pub mod concurrent_graph {
         {
             let in0_policy = *self.edges.0.policy();
             let out1_policy = *self.edges.1.policy();
-
-            let inputs: [&'graph mut <Self as GraphNodeTypes<1, 1, 1>>::InQ; 1] =
-                [&mut (self.endpoints.0).0];
-            let outputs: [&'graph mut <Self as GraphNodeTypes<1, 1, 1>>::OutQ; 1] =
-                [&mut (self.endpoints.1).1];
-
-            let in_managers: [&'graph mut <Self as GraphNodeTypes<1, 1, 1>>::InM; 1] =
-                [&mut self.managers.0];
-            let out_managers: [&'graph mut <Self as GraphNodeTypes<1, 1, 1>>::OutM; 1] =
-                [&mut self.managers.1];
-
-            let in_policies: [EdgePolicy; 1] = [in0_policy];
-            let out_policies: [EdgePolicy; 1] = [out1_policy];
-
-            let node_id: u32 = 1;
-            let in_edge_ids: [u32; 1] = [1];
-            let out_edge_ids: [u32; 1] = [2];
-
             StepContext::new(
-                inputs,
-                outputs,
-                in_managers,
-                out_managers,
-                in_policies,
-                out_policies,
-                node_id,
-                in_edge_ids,
-                out_edge_ids,
+                [self.edges.0.queue_mut()],
+                [self.edges.1.queue_mut()],
+                [&mut self.managers.0],
+                [&mut self.managers.1],
+                [in0_policy],
+                [out1_policy],
+                1u32,
+                [1u32],
+                [2u32],
                 clock,
                 telemetry,
             )
@@ -1732,37 +1555,23 @@ pub mod concurrent_graph {
             C: PlatformClock + Sized,
             T: Telemetry + Sized,
         {
-            let node = self.nodes.1.as_mut().expect("node 1 moved");
+            let node = &mut self.nodes.1;
             let in0_policy = *self.edges.0.policy();
             let out1_policy = *self.edges.1.policy();
-
-            let inputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::InQ; 1] =
-                [&mut (self.endpoints.0).0];
-            let outputs: [&mut <Self as GraphNodeTypes<1, 1, 1>>::OutQ; 1] =
-                [&mut (self.endpoints.1).1];
-
-            let in_managers: [&mut <Self as GraphNodeTypes<1, 1, 1>>::InM; 1] =
-                [&mut self.managers.0];
-            let out_managers: [&mut <Self as GraphNodeTypes<1, 1, 1>>::OutM; 1] =
-                [&mut self.managers.1];
-
-            let in_policies: [EdgePolicy; 1] = [in0_policy];
-            let out_policies: [EdgePolicy; 1] = [out1_policy];
-
-            let node_id: u32 = 1;
-            let in_edge_ids: [u32; 1] = [1];
-            let out_edge_ids: [u32; 1] = [2];
-
+            let inputs = [self.edges.0.queue_mut()];
+            let outputs = [self.edges.1.queue_mut()];
+            let in_mgrs = [&mut self.managers.0];
+            let out_mgrs = [&mut self.managers.1];
             let mut ctx = StepContext::new(
                 inputs,
                 outputs,
-                in_managers,
-                out_managers,
-                in_policies,
-                out_policies,
-                node_id,
-                in_edge_ids,
-                out_edge_ids,
+                in_mgrs,
+                out_mgrs,
+                [in0_policy],
+                [out1_policy],
+                1u32,
+                [1u32],
+                [2u32],
                 clock,
                 telemetry,
             );
@@ -1770,8 +1579,8 @@ pub mod concurrent_graph {
         }
     }
 
-    // node 2: in=[edge id 2], out=[]
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeContextBuilder<2, 1, 0>
+    // node 2: in=[e1], out=[]
+    impl<SrcClk: PlatformClock + Send + 'static> GraphNodeContextBuilder<2, 1, 0>
         for TestPipelineStd<SrcClk>
     where
         Self: GraphNodeAccess<2, Node = NodeLink<SnkNode, 1, 0, u32, ()>>,
@@ -1802,32 +1611,16 @@ pub mod concurrent_graph {
             T: Telemetry + Sized,
         {
             let in1_policy = *self.edges.1.policy();
-
-            let inputs: [&'graph mut <Self as GraphNodeTypes<2, 1, 0>>::InQ; 1] =
-                [&mut (self.endpoints.1).0];
-            let outputs: [&'graph mut <Self as GraphNodeTypes<2, 1, 0>>::OutQ; 0] = [];
-
-            let in_managers: [&'graph mut <Self as GraphNodeTypes<2, 1, 0>>::InM; 1] =
-                [&mut self.managers.1];
-            let out_managers: [&'graph mut <Self as GraphNodeTypes<2, 1, 0>>::OutM; 0] = [];
-
-            let in_policies: [EdgePolicy; 1] = [in1_policy];
-            let out_policies: [EdgePolicy; 0] = [/* empty */];
-
-            let node_id: u32 = 2;
-            let in_edge_ids: [u32; 1] = [2];
-            let out_edge_ids: [u32; 0] = [/* empty */];
-
             StepContext::new(
-                inputs,
-                outputs,
-                in_managers,
-                out_managers,
-                in_policies,
-                out_policies,
-                node_id,
-                in_edge_ids,
-                out_edge_ids,
+                [self.edges.1.queue_mut()],
+                [],
+                [&mut self.managers.1],
+                [],
+                [in1_policy],
+                [],
+                2u32,
+                [2u32],
+                [],
                 clock,
                 telemetry,
             )
@@ -1863,197 +1656,24 @@ pub mod concurrent_graph {
             C: PlatformClock + Sized,
             T: Telemetry + Sized,
         {
-            let node = self.nodes.2.as_mut().expect("node 2 moved");
+            let node = &mut self.nodes.2;
             let in1_policy = *self.edges.1.policy();
-
-            let inputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::InQ; 1] =
-                [&mut (self.endpoints.1).0];
-            let outputs: [&mut <Self as GraphNodeTypes<2, 1, 0>>::OutQ; 0] = [];
-
-            let in_managers: [&mut <Self as GraphNodeTypes<2, 1, 0>>::InM; 1] =
-                [&mut self.managers.1];
-            let out_managers: [&mut <Self as GraphNodeTypes<2, 1, 0>>::OutM; 0] = [];
-
-            let in_policies: [EdgePolicy; 1] = [in1_policy];
-            let out_policies: [EdgePolicy; 0] = [/* empty */];
-
-            let node_id: u32 = 2;
-            let in_edge_ids: [u32; 1] = [2];
-            let out_edge_ids: [u32; 0] = [/* empty */];
-
+            let inputs = [self.edges.1.queue_mut()];
+            let in_mgrs = [&mut self.managers.1];
             let mut ctx = StepContext::new(
                 inputs,
-                outputs,
-                in_managers,
-                out_managers,
-                in_policies,
-                out_policies,
-                node_id,
-                in_edge_ids,
-                out_edge_ids,
+                [],
+                in_mgrs,
+                [],
+                [in1_policy],
+                [],
+                2u32,
+                [2u32],
+                [],
                 clock,
                 telemetry,
             );
             f(node, &mut ctx)
-        }
-    }
-
-    // ===== Std-only owned handoff =====
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeOwnedEndpointHandoff<0, 0, 1>
-        for TestPipelineStd<SrcClk>
-    {
-        type NodeOwned = NodeLink<SrcNode<SrcClk>, 0, 1, (), u32>;
-
-        fn take_node_and_endpoints(
-            &mut self,
-        ) -> (
-            Self::NodeOwned,
-            [<Self as GraphNodeTypes<0, 0, 1>>::InQ; 0],
-            [<Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1],
-            [<Self as GraphNodeTypes<0, 0, 1>>::InM; 0],
-            [<Self as GraphNodeTypes<0, 0, 1>>::OutM; 1],
-            [EdgePolicy; 0],
-            [EdgePolicy; 1],
-        )
-        where
-            <Self as GraphNodeTypes<0, 0, 1>>::InQ: Send + 'static,
-            <Self as GraphNodeTypes<0, 0, 1>>::OutQ: Send + 'static,
-            <Self as GraphNodeTypes<0, 0, 1>>::InM: Send + 'static,
-            <Self as GraphNodeTypes<0, 0, 1>>::OutM: Send + 'static,
-        {
-            let node = self.nodes.0.take().expect("node 0 already taken");
-            let out0_policy = *self.edges.0.policy();
-            let out0 = (self.endpoints.0).1.clone();
-
-            (
-                node,
-                [],
-                [out0],
-                [],
-                [self.managers.0.clone()],
-                [],
-                [out0_policy],
-            )
-        }
-
-        fn put_node_and_endpoints(
-            &mut self,
-            node: Self::NodeOwned,
-            _inputs: [<Self as GraphNodeTypes<0, 0, 1>>::InQ; 0],
-            outputs: [<Self as GraphNodeTypes<0, 0, 1>>::OutQ; 1],
-            _in_managers: [<Self as GraphNodeTypes<0, 0, 1>>::InM; 0],
-            out_managers: [<Self as GraphNodeTypes<0, 0, 1>>::OutM; 1],
-        ) {
-            assert!(self.nodes.0.is_none(), "node 0 already present");
-            self.nodes.0 = Some(node);
-            (self.endpoints.0).1 = outputs[0].clone();
-            self.managers.0 = out_managers[0].clone();
-        }
-    }
-
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeOwnedEndpointHandoff<1, 1, 1>
-        for TestPipelineStd<SrcClk>
-    {
-        type NodeOwned = NodeLink<MapNode, 1, 1, u32, u32>;
-
-        fn take_node_and_endpoints(
-            &mut self,
-        ) -> (
-            Self::NodeOwned,
-            [<Self as GraphNodeTypes<1, 1, 1>>::InQ; 1],
-            [<Self as GraphNodeTypes<1, 1, 1>>::OutQ; 1],
-            [<Self as GraphNodeTypes<1, 1, 1>>::InM; 1],
-            [<Self as GraphNodeTypes<1, 1, 1>>::OutM; 1],
-            [EdgePolicy; 1],
-            [EdgePolicy; 1],
-        )
-        where
-            <Self as GraphNodeTypes<1, 1, 1>>::InQ: Send + 'static,
-            <Self as GraphNodeTypes<1, 1, 1>>::OutQ: Send + 'static,
-            <Self as GraphNodeTypes<1, 1, 1>>::InM: Send + 'static,
-            <Self as GraphNodeTypes<1, 1, 1>>::OutM: Send + 'static,
-        {
-            let node = self.nodes.1.take().expect("node 1 already taken");
-            let in0_policy = *self.edges.0.policy();
-            let out1_policy = *self.edges.1.policy();
-            let in0 = (self.endpoints.0).0.clone();
-            let out1 = (self.endpoints.1).1.clone();
-
-            (
-                node,
-                [in0],
-                [out1],
-                [self.managers.0.clone()],
-                [self.managers.1.clone()],
-                [in0_policy],
-                [out1_policy],
-            )
-        }
-        fn put_node_and_endpoints(
-            &mut self,
-            node: Self::NodeOwned,
-            inputs: [<Self as GraphNodeTypes<1, 1, 1>>::InQ; 1],
-            outputs: [<Self as GraphNodeTypes<1, 1, 1>>::OutQ; 1],
-            in_managers: [<Self as GraphNodeTypes<1, 1, 1>>::InM; 1],
-            out_managers: [<Self as GraphNodeTypes<1, 1, 1>>::OutM; 1],
-        ) {
-            assert!(self.nodes.1.is_none(), "node 1 already present");
-            self.nodes.1 = Some(node);
-            (self.endpoints.0).0 = inputs[0].clone();
-            (self.endpoints.1).1 = outputs[0].clone();
-            self.managers.0 = in_managers[0].clone();
-            self.managers.1 = out_managers[0].clone();
-        }
-    }
-
-    impl<SrcClk: PlatformClock + std::marker::Send + 'static> GraphNodeOwnedEndpointHandoff<2, 1, 0>
-        for TestPipelineStd<SrcClk>
-    {
-        type NodeOwned = NodeLink<SnkNode, 1, 0, u32, ()>;
-
-        fn take_node_and_endpoints(
-            &mut self,
-        ) -> (
-            Self::NodeOwned,
-            [<Self as GraphNodeTypes<2, 1, 0>>::InQ; 1],
-            [<Self as GraphNodeTypes<2, 1, 0>>::OutQ; 0],
-            [<Self as GraphNodeTypes<2, 1, 0>>::InM; 1],
-            [<Self as GraphNodeTypes<2, 1, 0>>::OutM; 0],
-            [EdgePolicy; 1],
-            [EdgePolicy; 0],
-        )
-        where
-            <Self as GraphNodeTypes<2, 1, 0>>::InQ: Send + 'static,
-            <Self as GraphNodeTypes<2, 1, 0>>::OutQ: Send + 'static,
-            <Self as GraphNodeTypes<2, 1, 0>>::InM: Send + 'static,
-            <Self as GraphNodeTypes<2, 1, 0>>::OutM: Send + 'static,
-        {
-            let node = self.nodes.2.take().expect("node 2 already taken");
-            let in1_policy = *self.edges.1.policy();
-            let in1 = (self.endpoints.1).0.clone();
-            (
-                node,
-                [in1],
-                [],
-                [self.managers.1.clone()],
-                [],
-                [in1_policy],
-                [],
-            )
-        }
-
-        fn put_node_and_endpoints(
-            &mut self,
-            node: Self::NodeOwned,
-            inputs: [<Self as GraphNodeTypes<2, 1, 0>>::InQ; 1],
-            _outputs: [<Self as GraphNodeTypes<2, 1, 0>>::OutQ; 0],
-            in_managers: [<Self as GraphNodeTypes<2, 1, 0>>::InM; 1],
-            _out_managers: [<Self as GraphNodeTypes<2, 1, 0>>::OutM; 0],
-        ) {
-            assert!(self.nodes.2.is_none(), "node 2 already present");
-            self.nodes.2 = Some(node);
-            (self.endpoints.1).0 = inputs[0].clone();
-            self.managers.1 = in_managers[0].clone();
         }
     }
 }

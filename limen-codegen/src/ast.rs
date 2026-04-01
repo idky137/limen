@@ -20,20 +20,13 @@ pub struct GraphDef {
     pub vis: Visibility,
     /// Name of the generated graph struct (e.g., `MyGraph`).
     pub name: Ident,
+    /// Whether to emit the std-only scoped execution API (`ScopedGraphApi`)
+    /// for this graph. The graph structure itself is unchanged.
+    pub emit_concurrent: bool,
     /// All node declarations for this graph, indexed by `NodeDef::idx`.
     pub nodes: Vec<NodeDef>,
     /// All edge declarations for this graph, indexed by `EdgeDef::idx`.
     pub edges: Vec<EdgeDef>,
-    /// Whether to emit the concurrent (`std`-gated) graph flavor.
-    ///
-    /// When `false` (default), only the non-std graph is generated. When
-    /// `true`, an additional `pub mod concurrent_graph` is emitted behind
-    /// `#[cfg(feature = "std")]` containing the `<Name>Std` graph with
-    /// owned-bundle handoff support.
-    ///
-    /// Users must ensure that their `manager_ty` satisfies `Clone + Send +
-    /// 'static` (e.g. `ConcurrentMemoryManager<P>`) when enabling this.
-    pub emit_concurrent: bool,
 }
 
 /// A single node declaration.

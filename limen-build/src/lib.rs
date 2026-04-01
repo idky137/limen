@@ -18,10 +18,9 @@ use quote::quote;
 /// This macro forwards its input tokens directly to
 /// [`limen_codegen::expand_tokens`] and returns the emitted items.
 ///
-/// Each invocation emits exactly **one** graph flavor. Use the trailing
-/// `concurrent;` keyword to select the `std`-gated concurrent flavor.
-/// To produce both flavors, call `define_graph!` twice with different
-/// struct names (gate the concurrent call with `#[cfg(feature = "std")]`).
+/// Each invocation emits a single concrete graph type. Use the trailing
+/// `concurrent;` keyword to additionally request the std-only
+/// `ScopedGraphApi` implementation for that same graph type.
 ///
 /// # Example (non-std only)
 /// ```ignore
@@ -42,16 +41,22 @@ use quote::quote;
 ///     }
 /// }
 ///
-/// // Concurrent flavor (only compiled under `std` feature):
+/// Add std-only scoped execution support for the same graph type:
 /// #[cfg(feature = "std")]
 /// define_graph! {
-///     pub struct MyGraph;   // will produce MyGraphStd inside concurrent_graph module
+///     pub struct MyGraph;
 ///
-///     nodes { /* same as above */ }
+///     nodes {
+///         0: { ty: my::Src, in_ports: 0, out_ports: 1, in_payload: (),  out_payload: u32, name: Some("src"), ingress_policy: MY_Q },
+///         1: { ty: my::Map, in_ports: 1, out_ports: 1, in_payload: u32, out_payload: u32, name: Some("map") },
+///         2: { ty: my::Sink, in_ports: 1, out_ports: 0, in_payload: u32, out_payload: (),  name: Some("sink") },
+///     }
+///
 ///     edges {
 ///         0: { ty: TestSpscRingBuf<8>, payload: u32, manager: ConcurrentMemoryManager<u32>, from: (0, 0), to: (1, 0), policy: EDGE_POL, name: Some("src->map") },
 ///         1: { ty: TestSpscRingBuf<8>, payload: u32, manager: ConcurrentMemoryManager<u32>, from: (1, 0), to: (2, 0), policy: EDGE_POL, name: Some("map->sink") },
 ///     }
+///
 ///     concurrent;
 /// }
 /// ```

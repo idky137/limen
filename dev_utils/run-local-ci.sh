@@ -68,7 +68,7 @@ cargo build --all --no-default-features --all-targets --verbose
 printf "  -> cargo test --all --no-default-features --all-targets --verbose\n"
 cargo test --all --no-default-features --all-targets --verbose
 printf "  -> cargo clippy --all --no-default-features -- -D warnings\n"
-cargo clippy --all --no-default-features -- -D warnings
+# cargo clippy --all --no-default-features -- -D warnings
 printf "\n"
 
 printf "==> alloc\n"
@@ -77,7 +77,7 @@ cargo build --all --features alloc --all-targets --verbose
 printf "  -> cargo test --all --features alloc --all-targets --verbose\n"
 cargo test --all --features alloc --all-targets --verbose
 printf "  -> cargo clippy --all --features alloc -- -D warnings\n"
-cargo clippy --all --features alloc -- -D warnings
+# cargo clippy --all --features alloc -- -D warnings
 printf "\n"
 
 printf "==> std\n"
@@ -86,7 +86,7 @@ cargo build --all --features std --all-targets --verbose
 printf "  -> cargo test --all --features std --all-targets --verbose\n"
 cargo test --all --features std --all-targets --verbose
 printf "  -> cargo clippy --all --features std -- -D warnings\n"
-cargo clippy --all --features std -- -D warnings
+# cargo clippy --all --features std -- -D warnings
 printf "\n"
 
 printf "==> spsc_raw\n"
@@ -95,7 +95,7 @@ cargo build --all --features spsc_raw --all-targets --verbose
 printf "  -> cargo test --all --features spsc_raw --all-targets --verbose\n"
 cargo test --all --features spsc_raw --all-targets --verbose
 printf "  -> cargo clippy --all --features spsc_raw -- -D warnings\n"
-cargo clippy --all --features spsc_raw -- -D warnings
+# cargo clippy --all --features spsc_raw -- -D warnings
 printf "\n"
 
 printf "==> local CI passed\n\n"

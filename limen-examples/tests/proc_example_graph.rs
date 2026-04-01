@@ -101,7 +101,7 @@ define_graph! {
 
     edges {
         0: {
-            ty: limen_core::edge::bench::TestSpscRingBuf<8>,
+            ty: limen_core::edge::spsc_concurrent::ConcurrentEdge,
             payload: u32,
             manager: limen_core::memory::concurrent_manager::ConcurrentMemoryManager<u32>,
             from: (0, 0),
@@ -110,7 +110,7 @@ define_graph! {
             name: Some("src->map")
         },
         1: {
-            ty: limen_core::edge::bench::TestSpscRingBuf<8>,
+            ty: limen_core::edge::spsc_concurrent::ConcurrentEdge,
             payload: u32,
             manager: limen_core::memory::concurrent_manager::ConcurrentMemoryManager<u32>,
             from: (1, 0),
@@ -123,7 +123,7 @@ define_graph! {
     concurrent;
 }
 
-// #[cfg(not(feature = "std"))]
+#[cfg(not(feature = "std"))]
 #[path = "proc_example_graph/no_std.rs"]
 mod no_std;
 

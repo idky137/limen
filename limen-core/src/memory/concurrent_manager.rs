@@ -59,6 +59,8 @@ use crate::memory::manager::MemoryManager;
 use crate::memory::MemoryClass;
 use crate::message::payload::Payload;
 use crate::message::{Message, MessageHeader};
+#[cfg(feature = "std")]
+use crate::prelude::ScopedManager;
 use crate::types::MessageToken;
 
 /// Special value meaning "no index" for the freelist next pointer and head.
@@ -574,6 +576,21 @@ impl<P: Payload> MemoryManager<P> for ConcurrentMemoryManager<P> {
 
     fn memory_class(&self) -> MemoryClass {
         self.memory_class()
+    }
+}
+
+#[cfg(feature = "std")]
+impl<P: Payload + Send + Sync> ScopedManager<P> for ConcurrentMemoryManager<P> {
+    type Handle<'a>
+        = ConcurrentMemoryManager<P>
+    where
+        Self: 'a;
+
+    fn scoped_handle<'a>(&'a self) -> Self::Handle<'a>
+    where
+        Self: 'a,
+    {
+        self.clone()
     }
 }
 

@@ -3,12 +3,11 @@
 //! This module defines a minimal `Source` trait and a `SourceNode` adapter that
 //! plugs a source into the existing `Node` and `Edge` contracts without changing
 //! any runtime or graph APIs. It also includes:
-//! - `SourceIngressEdge`: a borrowing, no-alloc adapter that exposes **ingress
+//! //! - `SourceIngressEdge`: a borrowing, no-alloc adapter that exposes **ingress
 //!   pressure** (items/bytes before the source) as an `Edge` so that the graph
 //!   and runtimes can uniformly sample it with their existing occupancy code.
-//! - `probe` (std-only): a lock-free, cross-thread ingress pressure probe using
-//!   atomics; the graph holds a typed `Edge` wrapper and the worker thread
-//!   updates the paired `Updater`.
+//! - `IngressProbe` / `NoProbe` / `IngressProbeImpl`: platform-agnostic ingress
+//!   pressure observer — zero-cost `NoProbe` by default; replace for real occupancy
 //!
 //! ### Design notes
 //! * A `Source` has **no input ports** and one or more **output ports**. It can
@@ -24,7 +23,7 @@ use crate::errors::QueueError;
 use crate::memory::PlacementAcceptance;
 use crate::message::{payload::Payload, Message};
 use crate::node::{Node, NodeCapabilities, NodeKind, ProcessResult, StepContext, StepResult};
-use crate::policy::{BatchingPolicy, EdgePolicy, NodePolicy};
+use crate::policy::{BatchingPolicy, EdgePolicy, NodePolicy, WatermarkState};
 use crate::prelude::{
     BatchView, EdgeDescriptor, HeaderStore, MemoryManager, PlatformClock, Telemetry,
 };
@@ -560,12 +559,42 @@ where
     }
 }
 
-/// Std-only, lock-free ingress pressure probe for cross-thread sources.
+/// Platform-agnostic ingress pressure observer.
 ///
-/// A `SourceIngressProbe` holds atomic item/byte counters. The graph keeps a
-/// typed `SourceIngressProbeEdge<P>` so runtimes can sample occupancy like any
-/// other edge, while the worker thread updates the paired
-/// `SourceIngressUpdater`.
+/// Implemented by `NoProbe` (zero-cost no_std stub) and by
+/// `probe::SourceIngressProbe` (live atomic counters, std-only).
+/// Source node logic uses `IngressProbeImpl` uniformly — no `#[cfg]` in node bodies.
+pub trait IngressProbe: Send {
+    /// Return the current ingress occupancy snapshot using `policy` to compute
+    /// the watermark consistently with real edges.
+    fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy;
+}
+
+/// Zero-cost stub used on no_std targets where no real probe is wired up.
+pub struct NoProbe;
+
+impl IngressProbe for NoProbe {
+    #[inline]
+    fn occupancy(&self, _policy: &EdgePolicy) -> EdgeOccupancy {
+        EdgeOccupancy::new(0, 0, WatermarkState::BelowSoft)
+    }
+}
+
+/// Concrete ingress probe type used on `std` targets.
+///
+/// This resolves to [`probe::SourceIngressProbe`], which tracks ingress
+/// pressure using shared atomic counters.
+#[cfg(feature = "std")]
+pub type IngressProbeImpl = probe::SourceIngressProbe;
+
+/// Concrete ingress probe type used on `no_std` targets.
+///
+/// This resolves to [`NoProbe`], a zero-cost stub that reports no ingress
+/// pressure when no live probe implementation is available.
+#[cfg(not(feature = "std"))]
+pub type IngressProbeImpl = NoProbe;
+
+/// Std-only, lock-free ingress pressure probe for cross-thread sources.
 #[cfg(feature = "std")]
 pub mod probe {
     use super::*;
@@ -580,7 +609,7 @@ pub mod probe {
     }
 
     impl SourceIngressProbe {
-        /// Create a new probe with zeroed counters.
+        /// Create a new ingress probe with zeroed item and byte counters.
         #[inline]
         pub fn new() -> Self {
             Self {
@@ -589,19 +618,20 @@ pub mod probe {
             }
         }
 
-        /// Set the live **items** count (Relaxed ordering).
+        /// Set the current ingress item count snapshot.
         #[inline]
         pub fn set_items(&self, n: usize) {
             self.items.store(n, Ordering::Relaxed);
         }
 
-        /// Set the live **bytes** count (Relaxed ordering).
+        /// Set the current ingress byte count snapshot.
         #[inline]
         pub fn set_bytes(&self, b: usize) {
             self.bytes.store(b, Ordering::Relaxed);
         }
 
-        /// Compute an `EdgeOccupancy` snapshot using the provided policy.
+        /// Build an occupancy snapshot from the current probe counters using
+        /// `policy` to compute the watermark.
         #[inline]
         pub fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
             let items = self.items.load(Ordering::Relaxed);
@@ -619,10 +649,14 @@ pub mod probe {
         }
     }
 
-    /// Payload-typed wrapper that exposes a probe as an `Edge<Item = Message<P>>`.
-    ///
-    /// This lets the graph store a typed "monitor edge" while a worker thread
-    /// updates the same probe instance through `SourceIngressUpdater`.
+    impl super::IngressProbe for SourceIngressProbe {
+        #[inline]
+        fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
+            SourceIngressProbe::occupancy(self, policy)
+        }
+    }
+
+    /// Payload-typed wrapper that exposes a probe as an `Edge`.
     #[derive(Debug, Clone)]
     pub struct SourceIngressProbeEdge<P: Payload> {
         probe: SourceIngressProbe,
@@ -630,7 +664,7 @@ pub mod probe {
     }
 
     impl<P: Payload> SourceIngressProbeEdge<P> {
-        /// Wrap an existing probe as a typed edge.
+        /// Wrap a probe as a payload-typed ingress monitor edge.
         #[inline]
         pub fn new(probe: SourceIngressProbe) -> Self {
             Self {
@@ -639,7 +673,7 @@ pub mod probe {
             }
         }
 
-        /// Borrow the underlying probe (for testing or diagnostics).
+        /// Borrow the underlying ingress probe.
         #[inline]
         pub fn inner(&self) -> &SourceIngressProbe {
             &self.probe
@@ -693,22 +727,19 @@ pub mod probe {
     }
 
     /// Cross-thread updater for a `SourceIngressProbe`.
-    ///
-    /// Clone and move this into the worker thread that owns the concrete
-    /// source; call `update()` whenever the device/FIFO depth changes.
     #[derive(Clone)]
     pub struct SourceIngressUpdater {
         probe: SourceIngressProbe,
     }
 
     impl SourceIngressUpdater {
-        /// Create a new updater bound to `probe`.
+        /// Create an updater for the given ingress probe.
         #[inline]
         pub fn new(probe: SourceIngressProbe) -> Self {
             Self { probe }
         }
 
-        /// Atomically update the items/bytes counters.
+        /// Update both ingress counters atomically from the caller's perspective.
         #[inline]
         pub fn update(&self, items: usize, bytes: usize) {
             self.probe.set_items(items);
@@ -716,10 +747,7 @@ pub mod probe {
         }
     }
 
-    /// Convenience: create a typed edge and its paired updater.
-    ///
-    /// The graph stores the returned `SourceIngressProbeEdge<P>`; the worker
-    /// keeps the `SourceIngressUpdater` and calls `update()` as pressure changes.
+    /// Convenience: create a typed probe edge and its paired updater.
     #[inline]
     pub fn new_probe_edge_pair<P: Payload>() -> (SourceIngressProbeEdge<P>, SourceIngressUpdater) {
         let probe = SourceIngressProbe::new();
@@ -728,28 +756,14 @@ pub mod probe {
         (edge, updater)
     }
 
-    /// Convenience: create an untyped probe and updater (if callers do not need a typed `Edge`).
+    /// Convenience: create an untyped probe and updater.
     #[inline]
     pub fn new_probe_pair() -> (SourceIngressProbe, SourceIngressUpdater) {
         let p = SourceIngressProbe::new();
         (p.clone(), SourceIngressUpdater::new(p))
     }
 
-    /// Link wrapper for a concurrent ingress **monitor edge** (std-only).
-    ///
-    /// `ConcurrentIngressEdgeLink<OutP>` wraps a typed [`SourceIngressProbeEdge<OutP>`]
-    /// together with the metadata needed by the graph (edge id, endpoints, and policy),
-    /// so runtimes can treat the source’s *ingress pressure* like any other edge.
-    ///
-    /// Characteristics:
-    /// - **No buffering**: `try_push`/`try_pop` always reject; only `occupancy()` is meaningful.
-    /// - **Cross-thread safe**: the paired [`SourceIngressUpdater`] (held by the worker thread)
-    ///   updates atomics that this link reads via the inner probe edge.
-    /// - **Typed** by `OutP` so the graph can keep payload-typed edge inventories.
-    ///
-    /// Typical use: expose a synthetic “ingress0” edge (often edge id 0) whose occupancy
-    /// reflects upstream device/FIFO depth for scheduling and diagnostics, without changing
-    /// queue contracts elsewhere in the system.
+    /// Link wrapper for a concurrent ingress monitor edge (std-only).
     #[derive(Debug)]
     pub struct ConcurrentIngressEdgeLink<OutP: Payload> {
         edge: SourceIngressProbeEdge<OutP>,
@@ -761,7 +775,8 @@ pub mod probe {
     }
 
     impl<OutP: Payload> ConcurrentIngressEdgeLink<OutP> {
-        /// Construct from a probe edge (paired with a `SourceIngressUpdater` on the worker).
+        /// Construct a concurrent ingress edge link from a probe-backed edge and its
+        /// descriptor metadata.
         #[inline]
         pub fn from_probe(
             probe_edge: SourceIngressProbeEdge<OutP>,
@@ -781,25 +796,25 @@ pub mod probe {
             }
         }
 
-        /// Edge descriptor.
+        /// Return the descriptor for this synthetic ingress edge.
         #[inline]
         pub fn descriptor(&self) -> EdgeDescriptor {
             EdgeDescriptor::new(self.id, self.upstream, self.downstream, self.name)
         }
 
-        /// Policy accessor.
+        /// Return the policy associated with this synthetic ingress edge.
         #[inline]
         pub fn policy(&self) -> EdgePolicy {
             self.policy
         }
 
-        /// Borrow the inner probe edge.
+        /// Borrow the inner probe-backed edge immutably.
         #[inline]
         pub fn inner(&self) -> &SourceIngressProbeEdge<OutP> {
             &self.edge
         }
 
-        /// Mutably borrow the inner probe edge.
+        /// Borrow the inner probe-backed edge mutably.
         #[inline]
         pub fn inner_mut(&mut self) -> &mut SourceIngressProbeEdge<OutP> {
             &mut self.edge
@@ -830,7 +845,6 @@ pub mod probe {
         }
         #[inline]
         fn occupancy(&self, policy: &EdgePolicy) -> EdgeOccupancy {
-            // Delegate to the probe (reads atomics, computes watermark via policy).
             self.edge.occupancy(policy)
         }
         #[inline]
