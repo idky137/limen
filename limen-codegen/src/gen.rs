@@ -1031,8 +1031,19 @@ impl<'a> NonStd<'a> {
                         let _any_input = *_ingress_occ.items() > 0;
                     }
                 } else {
-                    quote! {
-                        let _any_input = false #( || (#in_occ_items > 0) )*;
+                    match in_occ_items.len() {
+                        0 => quote! {
+                            let _any_input = false;
+                        },
+                        1 => {
+                            let only_in_occ = &in_occ_items[0];
+                            quote! {
+                                let _any_input = #only_in_occ > 0;
+                            }
+                        }
+                        _ => quote! {
+                            let _any_input = #( (#in_occ_items > 0) )||*;
+                        },
                     }
                 };
 

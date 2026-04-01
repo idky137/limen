@@ -1102,7 +1102,7 @@ pub mod concurrent_graph {
                         state.current_tick = clock_ref.now_ticks();
 
                         let _any_input =
-                            false || (*crate::edge::Edge::occupancy(&in_e_1_0, &pol_0).items() > 0);
+                            *crate::edge::Edge::occupancy(&in_e_1_0, &pol_0).items() > 0;
 
                         let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
                         {
@@ -1173,7 +1173,7 @@ pub mod concurrent_graph {
                         state.current_tick = clock_ref.now_ticks();
 
                         let _any_input =
-                            false || (*crate::edge::Edge::occupancy(&in_e_2_0, &pol_1).items() > 0);
+                            *crate::edge::Edge::occupancy(&in_e_2_0, &pol_1).items() > 0;
 
                         let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
                         // no output edges — no watermark check
