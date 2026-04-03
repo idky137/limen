@@ -498,6 +498,7 @@ pub struct TestSinkNodeTensor {
     node_policy: NodePolicy,
     input_placement_acceptance: [PlacementAcceptance; 1],
     printer: fn(&str),
+    processed: u32,
 }
 
 impl TestSinkNodeTensor {
@@ -513,7 +514,13 @@ impl TestSinkNodeTensor {
             node_policy,
             input_placement_acceptance,
             printer,
+            processed: 0,
         }
+    }
+
+    /// Returns the number of messages this sink has pushed out thhe graph
+    pub fn processed(&self) -> &u32 {
+        &self.processed
     }
 }
 
@@ -531,6 +538,7 @@ impl<const N: usize> FixedBuf<N> {
             len: 0,
         }
     }
+
     #[inline]
     fn as_str(&self) -> &str {
         core::str::from_utf8(&self.buf[..self.len]).unwrap_or_default()
@@ -540,15 +548,50 @@ impl<const N: usize> FixedBuf<N> {
 impl<const N: usize> core::fmt::Write for FixedBuf<N> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let bytes = s.as_bytes();
+        // how many bytes can we write
         let remaining = N.saturating_sub(self.len);
-        if bytes.len() > remaining {
-            return Err(core::fmt::Error);
+        if remaining == 0 {
+            // nothing fits — silently accept (so formatting can continue),
+            // the buffer remains as-is.
+            return Ok(());
         }
-        let dst = &mut self.buf[self.len..self.len + bytes.len()];
-        for (d, b) in dst.iter_mut().zip(bytes.iter().copied()) {
+
+        // copy as many bytes as will fit
+        let mut to_copy = core::cmp::min(bytes.len(), remaining);
+
+        // Copy the slice into the buffer
+        let dst = &mut self.buf[self.len..self.len + to_copy];
+        // Manual copy to avoid depending on std
+        for (d, &b) in dst.iter_mut().zip(&bytes[..to_copy]) {
             *d = b;
         }
-        self.len += bytes.len();
+
+        // Ensure we don't end with a truncated UTF-8 sequence.
+        // If the last byte(s) are continuation bytes (0b10xxxxxx),
+        // back up to the last UTF-8 character boundary.
+        //
+        // UTF-8 continuation bytes have the top two bits == 0b10 (0x80..=0xBF).
+        // A leading byte never has those bits equal to 0b10.
+        //
+        // Walk backwards while the last byte is a continuation byte.
+        while to_copy > 0 {
+            let last = self.buf[self.len + to_copy - 1];
+            if (last & 0xC0) != 0x80 {
+                // we found a non-continuation byte => character boundary
+                break;
+            }
+            to_copy -= 1;
+        }
+
+        // If we backed off to zero, nothing valid fits from this write;
+        // undo the earlier copy in that case.
+        if to_copy == 0 {
+            // nothing could be written as a valid UTF-8 suffix; leave buffer unchanged.
+            return Ok(());
+        }
+
+        // Set the new length to include only the valid bytes
+        self.len += to_copy;
         Ok(())
     }
 }
@@ -574,9 +617,11 @@ impl Sink<TestTensor, 1> for TestSinkNodeTensor {
         let mut random_seed = 1;
         random_test_node_delay(&mut random_seed, 100);
 
-        let mut buf: FixedBuf<256> = FixedBuf::new();
+        let mut buf: FixedBuf<1024> = FixedBuf::new();
         let _ = core::write!(&mut buf, "{:?}", msg);
         (self.printer)(buf.as_str());
+
+        self.processed += 1;
 
         Ok(())
     }

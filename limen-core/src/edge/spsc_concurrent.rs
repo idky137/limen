@@ -73,19 +73,26 @@ impl ConcurrentEdgeInner {
             self.tail = 0;
             return;
         }
+
         if self.head == 0 {
-            self.tail = (self.head + self.len) % self.capacity;
+            self.tail = self.len % self.capacity;
             return;
         }
+
         let cap = self.capacity;
+        let mut live_tokens = Vec::with_capacity(self.len);
+
         for i in 0..self.len {
             let src = (self.head + i) % cap;
-            let tmp = core::mem::take(&mut self.buf[src]);
-            self.buf[i] = tmp;
+            live_tokens.push(core::mem::take(&mut self.buf[src]));
         }
+
+        self.buf[..self.len].copy_from_slice(&live_tokens[..self.len]);
+
         for i in self.len..cap {
             self.buf[i] = MessageToken::default();
         }
+
         self.head = 0;
         self.tail = self.len % cap;
     }

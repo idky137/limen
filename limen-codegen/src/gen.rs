@@ -1009,134 +1009,245 @@ impl<'a> NonStd<'a> {
                     quote! { [ #( #out_m_refs ),* ] }
                 };
 
-                // --- Occupancy query expressions (concrete types, no dyn) ---
+                // --- Input occupancy cheap queries (concrete types, no dyn). ---
                 let in_occ_items: Vec<TokenStream2> = in_q_vars
                     .iter()
                     .zip(&in_pol_vars)
                     .map(|(v, p)| quote! { *limen_core::edge::Edge::occupancy(&#v, &#p).items() })
                     .collect();
-                // Output occupancy + watermark queries
+
+                // --- Output occupancy + watermark queries (concrete types, no dyn) ---
                 let out_occ_exprs: Vec<TokenStream2> = out_q_vars
                     .iter()
                     .zip(&out_pol_vars)
                     .map(|(v, p)| quote! { limen_core::edge::Edge::occupancy(&#v, &#p) })
                     .collect();
 
-                // Source nodes (with ingress_policy) use ingress_occupancy()
-                // for readiness instead of input edge occupancy (they have none).
                 let is_ingress_node = self.ingress_nodes.contains(&i);
-                let input_avail_expr = if is_ingress_node {
+
+                let node_count_lit = node_count;
+                // concrete literal for in_ports so generated code does not depend
+                // on an `IN` identifier at runtime.
+                let in_ports_lit = proc_macro2::Literal::usize_unsuffixed(in_ports);
+
+
+                // Generate a single static worker body per node (no runtime `if IN==0`).
+                let worker_quote = if is_ingress_node {
+                    // Source (ingress) node: call the source helper to determine
+                    // whether ingress can form a batch. Construct StepContext only
+                    // inside the Step branch.
                     quote! {
-                        let _ingress_occ = #nvar.node().source_ref().ingress_occupancy();
-                        let _any_input = *_ingress_occ.items() > 0;
+                        // Compile-time Send assertion — error here means #node_ty is not Send.
+                        {
+                            fn _assert_send<_T: core::marker::Send>() {}
+                            _assert_send::<#node_ty>();
+                        }
+                        scope.spawn(move || {
+                            #( #in_mut_binds )*
+                            #( #out_mut_binds )*
+                            let mut telem = #tvar;
+
+                            let mut state = limen_core::scheduling::WorkerState::new(
+                                #i,
+                                #node_count_lit,
+                                clock_ref.now_ticks(),
+                            );
+
+                            loop {
+                                state.current_tick = clock_ref.now_ticks();
+
+                                // Source: authoritative ingress batch check via SourceNode helper.
+                                let _any_input = #nvar.node().ingress_edge_has_batch();
+
+                                // Compute max output backpressure
+                                let mut _max_wm = limen_core::policy::WatermarkState::BelowSoft;
+                                #(
+                                    {
+                                        let _occ = #out_occ_exprs;
+                                        if *_occ.watermark() > _max_wm {
+                                            _max_wm = *_occ.watermark();
+                                        }
+                                    }
+                                )*
+                                state.backpressure = _max_wm;
+
+                                state.readiness = if !_any_input {
+                                    limen_core::scheduling::Readiness::NotReady
+                                } else if _max_wm >= limen_core::policy::WatermarkState::BetweenSoftAndHard {
+                                    limen_core::scheduling::Readiness::ReadyUnderPressure
+                                } else {
+                                    limen_core::scheduling::Readiness::Ready
+                                };
+
+                                match sched_ref.decide(&state) {
+                                    limen_core::scheduling::WorkerDecision::Step => {
+                                        // Construct ctx only for Step.
+                                        let mut ctx = limen_core::node::StepContext::new(
+                                            #in_q_array,
+                                            #out_q_array,
+                                            #in_m_array,
+                                            #out_m_array,
+                                            [ #( #in_pol_vars ),* ],
+                                            [ #( #out_pol_vars ),* ],
+                                            #node_id as u32,
+                                            [ #( #in_ids as u32 ),* ],
+                                            [ #( #out_ids as u32 ),* ],
+                                            clock_ref,
+                                            &mut telem,
+                                        );
+                                        match #nvar.step(&mut ctx) {
+                                            Ok(sr) => {
+                                                state.last_step = Some(sr);
+                                                state.last_error = false;
+                                            }
+                                            Err(_e) => {
+                                                state.last_step = None;
+                                                state.last_error = true;
+                                            }
+                                        }
+                                    }
+                                    limen_core::scheduling::WorkerDecision::WaitMicros(d) => {
+                                        ::std::thread::sleep(::std::time::Duration::from_micros(d));
+                                        state.last_step = None;
+                                        state.last_error = false;
+                                    }
+                                    limen_core::scheduling::WorkerDecision::Stop => break,
+                                    _ => break,
+                                }
+                            }
+                        });
                     }
                 } else {
-                    match in_occ_items.len() {
-                        0 => quote! {
-                            let _any_input = false;
-                        },
-                        1 => {
-                            let only_in_occ = &in_occ_items[0];
-                            quote! {
-                                let _any_input = #only_in_occ > 0;
-                            }
+                    // Non-source node: build a single StepContext, probe inputs via
+                    // the authoritative StepContext helper, set readiness, and reuse
+                    // the ctx for the actual step.
+                    quote! {
+                        // Compile-time Send assertion — error here means #node_ty is not Send.
+                        {
+                            fn _assert_send<_T: core::marker::Send>() {}
+                            _assert_send::<#node_ty>();
                         }
-                        _ => quote! {
-                            let _any_input = #( (#in_occ_items > 0) )||*;
-                        },
+                        scope.spawn(move || {
+                            #( #in_mut_binds )*
+                            #( #out_mut_binds )*
+                            let mut telem = #tvar;
+
+                            let mut state = limen_core::scheduling::WorkerState::new(
+                                #i,
+                                #node_count_lit,
+                                clock_ref.now_ticks(),
+                            );
+
+                            loop {
+                                state.current_tick = clock_ref.now_ticks();
+
+                                // Compute max output backpressure
+                                let mut _max_wm = limen_core::policy::WatermarkState::BelowSoft;
+                                #(
+                                    {
+                                        let _occ = #out_occ_exprs;
+                                        if *_occ.watermark() > _max_wm {
+                                            _max_wm = *_occ.watermark();
+                                        }
+                                    }
+                                )*
+                                state.backpressure = _max_wm;
+
+                                // --- Cheap pre-check: any input items > 0 ? ---
+                                let mut any_input_has_items = false;
+                                #(
+                                    if #in_occ_items > 0 {
+                                        any_input_has_items = true;
+                                    }
+                                )*
+
+                                // If we have any items, build a short-lived probe ctx to
+                                // call the authoritative `input_edge_has_batch`.
+                                let mut any_input_has_batch = false;
+                                if any_input_has_items {
+                                    let mut probe_ctx = limen_core::node::StepContext::new(
+                                        #in_q_array,
+                                        #out_q_array,
+                                        #in_m_array,
+                                        #out_m_array,
+                                        [ #( #in_pol_vars ),* ],
+                                        [ #( #out_pol_vars ),* ],
+                                        #node_id as u32,
+                                        [ #( #in_ids as u32 ),* ],
+                                        [ #( #out_ids as u32 ),* ],
+                                        clock_ref,
+                                        &mut telem,
+                                    );
+                                    let node_policy = #nvar.policy();
+                                    for port in 0..#in_ports_lit {
+                                        if probe_ctx.input_edge_has_batch(port, &node_policy) {
+                                            any_input_has_batch = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                state.readiness = if any_input_has_batch {
+                                    if _max_wm >= limen_core::policy::WatermarkState::BetweenSoftAndHard {
+                                        limen_core::scheduling::Readiness::ReadyUnderPressure
+                                    } else {
+                                        limen_core::scheduling::Readiness::Ready
+                                    }
+                                } else {
+                                    limen_core::scheduling::Readiness::NotReady
+                                };
+
+                                match sched_ref.decide(&state) {
+                                    limen_core::scheduling::WorkerDecision::Step => {
+                                        // Reconstruct real ctx for actual step (cheap probe ctx
+                                        // was ephemeral). This keeps semantics identical to
+                                        // the original but avoids probing when there are
+                                        // no items.
+                                        let mut ctx = limen_core::node::StepContext::new(
+                                            #in_q_array,
+                                            #out_q_array,
+                                            #in_m_array,
+                                            #out_m_array,
+                                            [ #( #in_pol_vars ),* ],
+                                            [ #( #out_pol_vars ),* ],
+                                            #node_id as u32,
+                                            [ #( #in_ids as u32 ),* ],
+                                            [ #( #out_ids as u32 ),* ],
+                                            clock_ref,
+                                            &mut telem,
+                                        );
+                                        match #nvar.step(&mut ctx) {
+                                            Ok(sr) => {
+                                                state.last_step = Some(sr);
+                                                state.last_error = false;
+                                            }
+                                            Err(e) => {
+                                                // Print node error so concurrent failures are visible.
+                                                ::std::eprintln!(
+                                                    "run_scoped: node {} step failed: {:?}",
+                                                    #node_id, e
+                                                );
+                                                state.last_step = None;
+                                                state.last_error = true;
+                                            }
+                                        }
+                                    }
+
+                                    limen_core::scheduling::WorkerDecision::WaitMicros(d) => {
+                                        ::std::thread::sleep(::std::time::Duration::from_micros(d));
+                                        state.last_step = None;
+                                        state.last_error = false;
+                                    }
+                                    limen_core::scheduling::WorkerDecision::Stop => break,
+                                    _ => break,
+                                }
+                            }
+                        });
                     }
                 };
 
-                let node_count_lit = node_count;
-
-                quote! {
-                    // Compile-time Send assertion — error here means #node_ty is not Send.
-                    {
-                        fn _assert_send<_T: core::marker::Send>() {}
-                        _assert_send::<#node_ty>();
-                    }
-                    scope.spawn(move || {
-                        #( #in_mut_binds )*
-                        #( #out_mut_binds )*
-                        let mut telem = #tvar;
-
-                        let mut state = limen_core::scheduling::WorkerState::new(
-                            #i,
-                            #node_count_lit,
-                            clock_ref.now_ticks(),
-                        );
-
-                        loop {
-                            // --- Refresh WorkerState from concrete edge types ---
-                            state.current_tick = clock_ref.now_ticks();
-
-                            // Compute readiness: any input available?
-                            #input_avail_expr
-
-                            // Compute max output backpressure
-                            let mut _max_wm = limen_core::policy::WatermarkState::BelowSoft;
-                            #(
-                                {
-                                    let _occ = #out_occ_exprs;
-                                    if *_occ.watermark() > _max_wm {
-                                        _max_wm = *_occ.watermark();
-                                    }
-                                }
-                            )*
-                            state.backpressure = _max_wm;
-
-                            // Readiness contract (from scheduling.rs):
-                            // - all inputs empty → NotReady
-                            // - any input non-empty AND any output ≥ soft → ReadyUnderPressure
-                            // - any input non-empty AND all below soft → Ready
-                            state.readiness = if !_any_input {
-                                limen_core::scheduling::Readiness::NotReady
-                            } else if _max_wm >= limen_core::policy::WatermarkState::BetweenSoftAndHard {
-                                limen_core::scheduling::Readiness::ReadyUnderPressure
-                            } else {
-                                limen_core::scheduling::Readiness::Ready
-                            };
-
-                            // --- Ask scheduler ---
-                            match sched_ref.decide(&state) {
-                                limen_core::scheduling::WorkerDecision::Step => {
-                                    let mut ctx = limen_core::node::StepContext::new(
-                                          #in_q_array,
-                                          #out_q_array,
-                                          #in_m_array,
-                                          #out_m_array,
-                                          [ #( #in_pol_vars ),* ],
-                                          [ #( #out_pol_vars ),* ],
-                                          #node_id as u32,
-                                          [ #( #in_ids as u32 ),* ],
-                                          [ #( #out_ids as u32 ),* ],
-                                          clock_ref,
-                                          &mut telem,
-                                      );
-                                    match #nvar.step(&mut ctx) {
-                                        Ok(sr) => {
-                                            state.last_step = Some(sr);
-                                            state.last_error = false;
-                                        }
-                                        Err(_e) => {
-                                            state.last_step = None;
-                                            state.last_error = true;
-                                        }
-                                    }
-                                }
-                                limen_core::scheduling::WorkerDecision::WaitMicros(d) => {
-                                    ::std::thread::sleep(
-                                        ::std::time::Duration::from_micros(d),
-                                    );
-                                    state.last_step = None;
-                                    state.last_error = false;
-                                }
-                                limen_core::scheduling::WorkerDecision::Stop => break,
-                                _ => break, // forward-compat for future variants
-                            }
-                        }
-                    });
-                }
+                // Insert the chosen worker quote into the workers vector
+                worker_quote
             })
             .collect();
 

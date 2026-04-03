@@ -545,6 +545,12 @@ where
                     match self.outputs[o].try_pop(&*self.out_managers[o]) {
                         Ok(evicted) => {
                             let _ = self.out_managers[o].free(evicted);
+                            if T::METRICS_ENABLED {
+                                self.telemetry.incr_counter(
+                                    TelemetryKey::node(self.node_id, TelemetryKind::Dropped),
+                                    1,
+                                );
+                            }
                         }
                         Err(_) => break,
                     }
@@ -561,6 +567,12 @@ where
                 match self.outputs[o].try_pop(&*self.out_managers[o]) {
                     Ok(evicted) => {
                         let _ = self.out_managers[o].free(evicted);
+                        if T::METRICS_ENABLED {
+                            self.telemetry.incr_counter(
+                                TelemetryKey::node(self.node_id, TelemetryKind::Dropped),
+                                1,
+                            );
+                        }
                     }
                     Err(_) => break,
                 }
@@ -621,42 +633,44 @@ where
     ) -> Result<StepResult, NodeError> {
         debug_assert!(port < OUT);
 
-        // Store message first so the token's header is available for admission
-        // decisions.
-        let token = self.out_managers[port]
-            .store(msg)
-            .map_err(|_| NodeError::execution_failed())?;
+        let admission_decision =
+            self.outputs[port].get_admission_decision_from_message(&self.out_policies[port], &msg);
 
-        // Pre-eviction: check what the policy requires and pop+free ALL
-        // tokens that need to be evicted before the push. This prevents
-        // manager slot leaks when Evict(n > 1) or EvictUntilBelowHard fires.
-        let decision = self.outputs[port].get_admission_decision(
-            &self.out_policies[port],
-            token,
-            &*self.out_managers[port],
-        );
-        match decision {
-            AdmissionDecision::Evict(n) => {
-                for _ in 0..n {
+        match admission_decision {
+            AdmissionDecision::Evict(eviction_count) => {
+                for _ in 0..eviction_count {
                     match self.outputs[port].try_pop(&*self.out_managers[port]) {
-                        Ok(evicted) => {
-                            let _ = self.out_managers[port].free(evicted);
+                        Ok(evicted_token) => {
+                            let _ = self.out_managers[port].free(evicted_token);
+                            if T::METRICS_ENABLED {
+                                self.telemetry.incr_counter(
+                                    TelemetryKey::node(self.node_id, TelemetryKind::Dropped),
+                                    1,
+                                );
+                            }
                         }
                         Err(_) => break,
                     }
                 }
             }
             AdmissionDecision::EvictUntilBelowHard => loop {
-                let occ = self.outputs[port].occupancy(&self.out_policies[port]);
+                let occupancy = self.outputs[port].occupancy(&self.out_policies[port]);
                 if !self.out_policies[port]
                     .caps
-                    .at_or_above_hard(*occ.items(), *occ.bytes())
+                    .at_or_above_hard(*occupancy.items(), *occupancy.bytes())
                 {
                     break;
                 }
+
                 match self.outputs[port].try_pop(&*self.out_managers[port]) {
-                    Ok(evicted) => {
-                        let _ = self.out_managers[port].free(evicted);
+                    Ok(evicted_token) => {
+                        let _ = self.out_managers[port].free(evicted_token);
+                        if T::METRICS_ENABLED {
+                            self.telemetry.incr_counter(
+                                TelemetryKey::node(self.node_id, TelemetryKind::Dropped),
+                                1,
+                            );
+                        }
                     }
                     Err(_) => break,
                 }
@@ -664,15 +678,26 @@ where
             AdmissionDecision::DropNewest
             | AdmissionDecision::Reject
             | AdmissionDecision::Block => {
-                // Not admitted — free the stored token and signal backpressure.
-                let _ = self.out_managers[port].free(token);
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
                 return Ok(StepResult::Backpressured);
             }
             AdmissionDecision::Admit => {}
         }
 
-        // After pre-eviction the edge should Admit. Push and handle any
-        // residual (e.g. concurrent race on a future ConcurrentEdge).
+        let token = match self.out_managers[port].store(msg) {
+            Ok(token) => token,
+            Err(_) => {
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
+                return Ok(StepResult::Backpressured);
+            }
+        };
+
         match self.outputs[port].try_push(
             token,
             &self.out_policies[port],
@@ -690,6 +715,10 @@ where
             }
             EnqueueResult::DroppedNewest | EnqueueResult::Rejected => {
                 let _ = self.out_managers[port].free(token);
+                if T::METRICS_ENABLED {
+                    self.telemetry
+                        .incr_counter(TelemetryKey::node(self.node_id, TelemetryKind::Dropped), 1);
+                }
                 Ok(StepResult::Backpressured)
             }
         }
@@ -900,6 +929,12 @@ where
                     match self.outputs[o].try_pop(&*self.out_managers[o]) {
                         Ok(evicted) => {
                             let _ = self.out_managers[o].free(evicted);
+                            if T::METRICS_ENABLED {
+                                self.telemetry.incr_counter(
+                                    TelemetryKey::node(self.node_id, TelemetryKind::Dropped),
+                                    1,
+                                );
+                            }
                         }
                         Err(_) => break,
                     }
@@ -916,6 +951,12 @@ where
                 match self.outputs[o].try_pop(&*self.out_managers[o]) {
                     Ok(evicted) => {
                         let _ = self.out_managers[o].free(evicted);
+                        if T::METRICS_ENABLED {
+                            self.telemetry.incr_counter(
+                                TelemetryKey::node(self.node_id, TelemetryKind::Dropped),
+                                1,
+                            );
+                        }
                     }
                     Err(_) => break,
                 }

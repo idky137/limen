@@ -162,6 +162,9 @@ where
     type Telemetry = T;
     type Error = RuntimeError;
 
+    #[cfg(feature = "std")]
+    type StopHandle = crate::runtime::RuntimeStopHandle;
+
     #[inline]
     fn init(
         &mut self,
@@ -322,9 +325,10 @@ pub mod concurrent_runtime {
     use crate::graph::{GraphApi, ScopedGraphApi};
     use crate::node::StepResult;
     use crate::policy::WatermarkState;
-    use crate::prelude::{PlatformClock, Telemetry};
+    use crate::prelude::{PlatformClock, Readiness, Telemetry};
     use crate::runtime::LimenRuntime;
     use crate::scheduling::{WorkerDecision, WorkerScheduler, WorkerState};
+    use crate::types::NodeIndex;
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -358,19 +362,31 @@ pub mod concurrent_runtime {
 
     impl WorkerScheduler for SimpleBackoffScheduler {
         fn decide(&self, state: &WorkerState) -> WorkerDecision {
+            // Honor immediate stop.
             if self.stop.load(Ordering::Relaxed) {
                 return WorkerDecision::Stop;
             }
-            match state.last_step {
-                None => WorkerDecision::Step, // First call or after wait
-                Some(StepResult::MadeProgress) => WorkerDecision::Step,
-                Some(StepResult::Terminal) => WorkerDecision::Stop,
-                Some(StepResult::Backpressured) => {
-                    WorkerDecision::WaitMicros(self.backpressure_micros)
+
+            // If we have a last step result, handle the authoritative cases first.
+            if let Some(last) = state.last_step {
+                match last {
+                    StepResult::Terminal => return WorkerDecision::Stop,
+                    StepResult::Backpressured => {
+                        return WorkerDecision::WaitMicros(self.backpressure_micros)
+                    }
+                    StepResult::MadeProgress => {}
+                    // For NoInput / WaitingOnExternal / YieldUntil(_) we'll consult readiness below.
+                    StepResult::NoInput
+                    | StepResult::WaitingOnExternal
+                    | StepResult::YieldUntil(_) => {}
                 }
-                Some(StepResult::NoInput)
-                | Some(StepResult::WaitingOnExternal)
-                | Some(StepResult::YieldUntil(_)) => WorkerDecision::WaitMicros(self.idle_micros),
+            }
+
+            // Either last_step was None, or the last step did not make progress.
+            // Use the node's computed readiness (set by the worker loop) to decide.
+            match state.readiness {
+                Readiness::Ready | Readiness::ReadyUnderPressure => WorkerDecision::Step,
+                Readiness::NotReady => WorkerDecision::WaitMicros(self.idle_micros),
             }
         }
     }
@@ -451,6 +467,9 @@ pub mod concurrent_runtime {
         type Clock = C;
         type Telemetry = T;
         type Error = RuntimeError;
+
+        #[cfg(feature = "std")]
+        type StopHandle = crate::runtime::RuntimeStopHandle;
 
         fn init(
             &mut self,
@@ -535,6 +554,11 @@ pub mod concurrent_runtime {
             }
         }
 
+        #[cfg(feature = "std")]
+        fn stop_handle(&self) -> Option<Self::StopHandle> {
+            Some(crate::runtime::RuntimeStopHandle::new(self.stop.clone()))
+        }
+
         #[inline]
         fn is_stopping(&self) -> bool {
             self.stop.load(Ordering::Relaxed)
@@ -586,20 +610,89 @@ pub mod concurrent_runtime {
             let scheduler = SimpleBackoffScheduler::new(self.stop.clone(), 50, 200);
             let mut any_progress = false;
 
+            // Refresh a cheap occupancy snapshot for this tick so we can compute
+            // inexpensive readiness for each node (same idea as run_scoped workers).
+            graph
+                .write_all_edge_occupancies(&mut self.occ)
+                .map_err(RuntimeError::from)?;
+
             for i in 0..NODE_COUNT {
                 let mut state = WorkerState::new(i, NODE_COUNT, clock.now_ticks());
                 state.last_step = self.node_last_step[i];
 
-                match scheduler.decide(&state) {
+                // Compute max output backpressure and whether any input has items
+                // by scanning the graph's edge descriptors and the occupancy
+                // snapshot `self.occ`.
+                let mut _max_wm = WatermarkState::BelowSoft;
+                let mut any_input_has_items = false;
+                let node_idx = NodeIndex::from(i);
+
+                for ed in graph.get_edge_descriptors().iter() {
+                    let eid = *ed.id().as_usize();
+                    // Upstream edges contribute to output backpressure.
+                    if ed.upstream().node() == &node_idx {
+                        let occ = &self.occ[eid];
+                        if *occ.watermark() > _max_wm {
+                            _max_wm = *occ.watermark();
+                        }
+                    }
+                    // Downstream edges determine whether this node has any input items.
+                    if ed.downstream().node() == &node_idx {
+                        let occ = &self.occ[eid];
+                        if *occ.items() > 0 {
+                            any_input_has_items = true;
+                        }
+                    }
+                }
+                state.backpressure = _max_wm;
+
+                // Compatibility: if we have no prior step (first probe) let the
+                // scheduler see Ready so the node gets probed at least once.
+                if state.last_step.is_none() {
+                    state.readiness = Readiness::Ready;
+                } else {
+                    // Otherwise use the cheap pre-check: if there are items on any
+                    // input edge (ingress included) we are Ready; otherwise NotReady.
+                    state.readiness = if any_input_has_items {
+                        if _max_wm >= WatermarkState::BetweenSoftAndHard {
+                            Readiness::ReadyUnderPressure
+                        } else {
+                            Readiness::Ready
+                        }
+                    } else {
+                        Readiness::NotReady
+                    };
+                }
+
+                // Ask the scheduler and log the decision for debugging.
+                let decision = scheduler.decide(&state);
+                // ::std::eprintln!(
+                //     "sched-debug: node={} last_step={:?} readiness={:?} => decision={:?}",
+                //     i,
+                //     state.last_step,
+                //     state.readiness,
+                //     decision
+                // );
+
+                match decision {
                     WorkerDecision::Step => {
                         match graph.step_node_by_index(i, &clock, &mut telemetry) {
                             Ok(sr) => {
+                                // Record last step result and note progress.
                                 self.node_last_step[i] = Some(sr);
                                 if matches!(sr, StepResult::MadeProgress | StepResult::Terminal) {
                                     any_progress = true;
                                 }
+
+                                // **Crucial:** update occupancy snapshot immediately so
+                                // downstream nodes in this same step() iteration see the
+                                // newly-produced items and compute readiness correctly.
+                                graph
+                                    .write_all_edge_occupancies(&mut self.occ)
+                                    .map_err(RuntimeError::from)?;
                             }
-                            Err(_) => {
+                            Err(e) => {
+                                ::std::eprintln!("sched-debug: node={} step error: {:?}", i, e);
                                 // NodeError is not fatal; clear state so we retry.
                                 self.node_last_step[i] = None;
                             }
@@ -617,11 +710,8 @@ pub mod concurrent_runtime {
                 }
             }
 
-            if any_progress {
-                graph
-                    .write_all_edge_occupancies(&mut self.occ)
-                    .map_err(RuntimeError::from)?;
-            }
+            // No final write_all_edge_occupancies here: we update occupancies
+            // right after each successful step above, so self.occ is up-to-date.
 
             self.telemetry = Some(telemetry);
             self.clock = Some(clock);
@@ -637,12 +727,17 @@ pub mod concurrent_runtime {
         ///
         /// After all threads join, refreshes the occupancy snapshot.
         fn run(&mut self, graph: &mut Graph) -> Result<(), Self::Error> {
-            let clock = self.clock.take().ok_or(RuntimeError::RuntimeInvariant(
+            const GRAPH_ID: crate::telemetry::GraphInstanceId = 0;
+
+            let clock = self.clock.clone().ok_or(RuntimeError::RuntimeInvariant(
                 RuntimeInvariantError::UninitializedClock,
             ))?;
-            let telemetry = self.telemetry.take().ok_or(RuntimeError::RuntimeInvariant(
-                RuntimeInvariantError::UninitializedTelemetry,
-            ))?;
+            let telemetry = self
+                .telemetry
+                .clone()
+                .ok_or(RuntimeError::RuntimeInvariant(
+                    RuntimeInvariantError::UninitializedTelemetry,
+                ))?;
 
             let scheduler = SimpleBackoffScheduler::new(
                 self.stop.clone(),
@@ -656,6 +751,21 @@ pub mod concurrent_runtime {
             graph
                 .write_all_edge_occupancies(&mut self.occ)
                 .map_err(RuntimeError::from)?;
+
+            if let (Some(ref clock), Some(telemetry)) = (&self.clock, self.telemetry.as_mut()) {
+                if T::EVENTS_STATICALLY_ENABLED && telemetry.events_enabled() {
+                    let timestamp_ns = Self::now_nanos(clock);
+                    let event = crate::telemetry::TelemetryEvent::runtime(
+                        crate::telemetry::RuntimeTelemetryEvent::new(
+                            GRAPH_ID,
+                            timestamp_ns,
+                            crate::telemetry::RuntimeTelemetryEventKind::GraphStopped,
+                            None,
+                        ),
+                    );
+                    telemetry.push_event(event);
+                }
+            }
 
             Ok(())
         }

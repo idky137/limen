@@ -9,7 +9,7 @@ use limen_core::prelude::TestTensor;
 
 /// Example edge policy used by the proc-macro graph.
 const EXAMPLE_EDGE_POLICY: EdgePolicy = EdgePolicy::new(
-    QueueCaps::new(8, 6, None, None),
+    QueueCaps::new(32, 32, None, None),
     AdmissionPolicy::DropNewest,
     OverBudgetAction::Drop,
 );
@@ -47,18 +47,18 @@ define_graph! {
 
     edges {
         0: {
-            ty: limen_core::edge::bench::TestSpscRingBuf<8>,
+            ty: limen_core::edge::bench::TestSpscRingBuf<32>,
             payload: TestTensor,
-            manager: limen_core::memory::static_manager::StaticMemoryManager<TestTensor, 8>,
+            manager: limen_core::memory::static_manager::StaticMemoryManager<TestTensor, 35>,
             from: (0, 0),
             to: (1, 0),
             policy: EXAMPLE_EDGE_POLICY,
             name: Some("src->map")
         },
         1: {
-            ty: limen_core::edge::bench::TestSpscRingBuf<8>,
+            ty: limen_core::edge::bench::TestSpscRingBuf<32>,
             payload: TestTensor,
-            manager: limen_core::memory::static_manager::StaticMemoryManager<TestTensor, 8>,
+            manager: limen_core::memory::static_manager::StaticMemoryManager<TestTensor, 35>,
             from: (1, 0),
             to: (2, 0),
             policy: EXAMPLE_EDGE_POLICY,

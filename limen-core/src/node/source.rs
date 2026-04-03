@@ -161,6 +161,59 @@ where
     pub fn source_mut(&mut self) -> &mut S {
         &mut self.src
     }
+
+    /// Return `true` if the ingress (external) edge for this source can
+    /// produce a batch *now* under the given batching `policy`.
+    ///
+    /// This mirrors `StepContext::input_edge_has_batch` semantics and the
+    /// `step_batch` checks: it is *observational* (no side effects) and
+    /// conservative on header-peek failures.
+    #[inline]
+    pub fn ingress_edge_has_batch(&self) -> bool {
+        // occupancy short-circuit
+        let ingress_occ = self.source_ref().ingress_occupancy();
+        if *ingress_occ.items() == 0 {
+            return false;
+        }
+
+        let policy = self.policy.batching();
+
+        let fixed_opt = *policy.fixed_n();
+        let delta_opt = *policy.max_delta_t();
+
+        match (fixed_opt, delta_opt) {
+            (Some(fixed_n), None) => *ingress_occ.items() >= fixed_n,
+            (None, Some(_max_delta_t)) => {
+                // Delta-only: any non-empty ingress can form a size-1 batch.
+                true
+            }
+            (Some(fixed_n), Some(max_delta_t)) => {
+                // Must be able to form a full fixed_n batch first.
+                if *ingress_occ.items() < fixed_n {
+                    return false;
+                }
+
+                // Non-destructive peeks at creation ticks for the first and
+                // the fixed_n-th ingress items.
+                let first_tick_opt = self.src.peek_ingress_creation_tick(0);
+                let last_tick_opt = self
+                    .src
+                    .peek_ingress_creation_tick(fixed_n.saturating_sub(1));
+
+                match (first_tick_opt, last_tick_opt) {
+                    (Some(first_ticks), Some(last_ticks)) => {
+                        let span = last_ticks.saturating_sub(first_ticks);
+                        span <= *max_delta_t.as_u64()
+                    }
+                    _ => false,
+                }
+            }
+            (None, None) => {
+                // No batching configured: treat as single-message readiness.
+                true
+            }
+        }
+    }
 }
 
 impl<S, OutP, const OUT: usize> Node<0, OUT, (), OutP> for SourceNode<S, OutP, OUT>

@@ -324,15 +324,17 @@ impl<T: Copy + Default + DType, const N: usize, const R: usize> Default for Tens
     }
 }
 
-impl<T: Copy + Default + DType, const N: usize, const R: usize> core::fmt::Debug
+impl<T: Copy + Default + DType + core::fmt::Debug, const N: usize, const R: usize> core::fmt::Debug
     for Tensor<T, N, R>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // show metadata and the live data slice
         f.debug_struct("Tensor")
             .field("data_type", &self.data_type())
             .field("len", &self.len)
             .field("shape", &&self.shape[..])
             .field("capacity", &N)
+            .field("data", &self.as_slice())
             .finish()
     }
 }

@@ -1,4 +1,19 @@
 //! limen-examples/build.rs
+//!
+//! Build script generating example Limen graphs (no_std and concurrent/std variants).
+//!
+//! This defines a simple 3-node pipeline (source → map → sink) with two edges,
+//! emitting codegen’d graph definitions for both single-threaded (SPSC) and
+//! concurrent runtimes.
+//!
+//! ⚠️ Memory manager sizing:
+//! The memory manager capacity must be at least:
+//!
+//!     edge queue capacity + downstream node batch size
+//!
+//! For example, with a queue of 32 and a node batch size of 32, the manager must
+//! be ≥ 64 (or slightly above to avoid edge cases). Undersizing will cause drops
+//! or stalled pipelines due to insufficient buffer availability.
 
 use limen_codegen::builder::{Edge, GraphBuilder, GraphVisibility, Node};
 
@@ -24,7 +39,7 @@ fn main() {
                 .out_payload::<TestTensor>()
                 .name(Some("src"))
                 .ingress_policy(EdgePolicy::new(
-                    QueueCaps::new(8, 6, None, None),
+                    QueueCaps::new(32, 32, None, None),
                     AdmissionPolicy::DropNewest,
                     OverBudgetAction::Drop,
                 )),
@@ -49,13 +64,13 @@ fn main() {
         )
         .edge(
             Edge::new(0)
-                .ty::<TestSpscRingBuf<8>>()
+                .ty::<TestSpscRingBuf<32>>()
                 .payload::<TestTensor>()
-                .manager_ty::<StaticMemoryManager<TestTensor, 8>>()
+                .manager_ty::<StaticMemoryManager<TestTensor, 35>>()
                 .from(0, 0)
                 .to(1, 0)
                 .policy(EdgePolicy::new(
-                    QueueCaps::new(8, 6, None, None),
+                    QueueCaps::new(32, 32, None, None),
                     AdmissionPolicy::DropNewest,
                     OverBudgetAction::Drop,
                 ))
@@ -63,13 +78,13 @@ fn main() {
         )
         .edge(
             Edge::new(1)
-                .ty::<TestSpscRingBuf<8>>()
+                .ty::<TestSpscRingBuf<32>>()
                 .payload::<TestTensor>()
-                .manager_ty::<StaticMemoryManager<TestTensor, 8>>()
+                .manager_ty::<StaticMemoryManager<TestTensor, 35>>()
                 .from(1, 0)
                 .to(2, 0)
                 .policy(EdgePolicy::new(
-                    QueueCaps::new(8, 6, None, None),
+                    QueueCaps::new(32, 32, None, None),
                     AdmissionPolicy::DropNewest,
                     OverBudgetAction::Drop,
                 ))
@@ -90,7 +105,7 @@ fn main() {
                 .out_payload::<TestTensor>()
                 .name(Some("src"))
                 .ingress_policy(EdgePolicy::new(
-                    QueueCaps::new(8, 6, None, None),
+                    QueueCaps::new(32, 32, None, None),
                     AdmissionPolicy::DropNewest,
                     OverBudgetAction::Drop,
                 )),
@@ -121,7 +136,7 @@ fn main() {
                 .from(0, 0)
                 .to(1, 0)
                 .policy(EdgePolicy::new(
-                    QueueCaps::new(8, 6, None, None),
+                    QueueCaps::new(32, 32, None, None),
                     AdmissionPolicy::DropNewest,
                     OverBudgetAction::Drop,
                 ))
@@ -135,7 +150,7 @@ fn main() {
                 .from(1, 0)
                 .to(2, 0)
                 .policy(EdgePolicy::new(
-                    QueueCaps::new(8, 6, None, None),
+                    QueueCaps::new(32, 32, None, None),
                     AdmissionPolicy::DropNewest,
                     OverBudgetAction::Drop,
                 ))

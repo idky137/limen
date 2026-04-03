@@ -1,8 +1,9 @@
 //! Limen single-producer single-consumer edge trait and related types.
 
 use crate::errors::QueueError;
+use crate::message::Message;
 use crate::policy::{AdmissionDecision, BatchingPolicy, EdgePolicy, WatermarkState};
-use crate::prelude::{BatchView, HeaderStore};
+use crate::prelude::{BatchView, HeaderStore, Payload};
 use crate::types::MessageToken;
 
 pub mod link;
@@ -175,6 +176,26 @@ pub trait Edge {
             ),
             Err(_) => AdmissionDecision::Reject,
         }
+    }
+
+    /// Return an `AdmissionDecision` for the given token according to
+    /// `policy` and the current occupancy snapshot.
+    ///
+    /// Pure: does not mutate the queue.
+    fn get_admission_decision_from_message<P: Payload>(
+        &self,
+        policy: &EdgePolicy,
+        message: &Message<P>,
+    ) -> AdmissionDecision {
+        let occ = self.occupancy(policy);
+        let h = message.header();
+        policy.decide(
+            occ.items,
+            occ.bytes,
+            *h.payload_size_bytes(),
+            *h.deadline_ns(),
+            *h.qos(),
+        )
     }
 }
 

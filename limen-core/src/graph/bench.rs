@@ -75,11 +75,11 @@ use crate::{
 };
 
 // Test edge types.
-type Q32 = crate::edge::bench::TestSpscRingBuf<8>;
+type Q32 = crate::edge::bench::TestSpscRingBuf<32>;
 const Q_32_POLICY: EdgePolicy = EdgePolicy {
     caps: crate::policy::QueueCaps {
-        max_items: 8,
-        soft_items: 8,
+        max_items: 32,
+        soft_items: 32,
         max_bytes: None,
         soft_bytes: None,
     },
@@ -88,7 +88,7 @@ const Q_32_POLICY: EdgePolicy = EdgePolicy {
 };
 
 // Test memory manager type (one per real edge).
-type Mgr32 = StaticMemoryManager<TestTensor, 8>;
+type Mgr32 = StaticMemoryManager<TestTensor, 35>;
 
 // Test source node types.
 #[allow(type_alias_bounds)]
@@ -1022,7 +1022,7 @@ pub mod concurrent_graph {
             let sched_ref = &scheduler;
 
             ::std::thread::scope(|scope| {
-                // --- Node 0: source (readiness from ingress_occupancy) ---
+                // --- Node 0: source (batch-aware readiness from ingress) ---
                 {
                     fn _assert_send<_T: core::marker::Send>() {}
                     _assert_send::<SrcNode<SrcClk>>();
@@ -1037,8 +1037,10 @@ pub mod concurrent_graph {
                     loop {
                         state.current_tick = clock_ref.now_ticks();
 
-                        let _ingress_occ = n0.node().source_ref().ingress_occupancy();
-                        let _any_input = *_ingress_occ.items() > 0;
+                        // Determine whether the ingress (external) edge can form a
+                        // batch now according to the source's ingress policy.
+                        let src = n0.node();
+                        let any_ingress_has_batch = src.ingress_edge_has_batch();
 
                         let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
                         {
@@ -1049,12 +1051,14 @@ pub mod concurrent_graph {
                         }
                         state.backpressure = _max_wm;
 
-                        state.readiness = if !_any_input {
-                            crate::scheduling::Readiness::NotReady
-                        } else if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
-                            crate::scheduling::Readiness::ReadyUnderPressure
+                        state.readiness = if any_ingress_has_batch {
+                            if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
+                                crate::scheduling::Readiness::ReadyUnderPressure
+                            } else {
+                                crate::scheduling::Readiness::Ready
+                            }
                         } else {
-                            crate::scheduling::Readiness::Ready
+                            crate::scheduling::Readiness::NotReady
                         };
 
                         match sched_ref.decide(&state) {
@@ -1093,7 +1097,7 @@ pub mod concurrent_graph {
                     }
                 });
 
-                // --- Node 1: model (readiness from input edge 0) ---
+                // --- Node 1: model (batch-aware readiness from input edge 0) ---
                 {
                     fn _assert_send<_T: core::marker::Send>() {}
                     _assert_send::<MapNode>();
@@ -1110,9 +1114,7 @@ pub mod concurrent_graph {
                     loop {
                         state.current_tick = clock_ref.now_ticks();
 
-                        let _any_input =
-                            *crate::edge::Edge::occupancy(&in_e_1_0, &pol_0).items() > 0;
-
+                        // Compute max output backpressure
                         let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
                         {
                             let _occ = crate::edge::Edge::occupancy(&out_e_1_0, &pol_1);
@@ -1122,16 +1124,53 @@ pub mod concurrent_graph {
                         }
                         state.backpressure = _max_wm;
 
-                        state.readiness = if !_any_input {
-                            crate::scheduling::Readiness::NotReady
-                        } else if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
-                            crate::scheduling::Readiness::ReadyUnderPressure
+                        // Cheap pre-check: do any input edges have items?
+                        let mut any_input_has_items = false;
+                        {
+                            let _occ = crate::edge::Edge::occupancy(&in_e_1_0, &pol_0);
+                            if *_occ.items() > 0 {
+                                any_input_has_items = true;
+                            }
+                        }
+
+                        // Probe authoritative batch semantics only if we have items.
+                        let mut any_input_has_batch = false;
+                        if any_input_has_items {
+                            let mut probe_ctx = crate::node::StepContext::new(
+                                [&mut in_e_1_0],
+                                [&mut out_e_1_0],
+                                [&mut in_m_1_0],
+                                [&mut out_m_1_0],
+                                [pol_0],
+                                [pol_1],
+                                1u32,
+                                [1u32],
+                                [2u32],
+                                clock_ref,
+                                &mut telem,
+                            );
+                            let node_policy = n1.policy();
+                            for port in 0..1 {
+                                if probe_ctx.input_edge_has_batch(port, &node_policy) {
+                                    any_input_has_batch = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        state.readiness = if any_input_has_batch {
+                            if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
+                                crate::scheduling::Readiness::ReadyUnderPressure
+                            } else {
+                                crate::scheduling::Readiness::Ready
+                            }
                         } else {
-                            crate::scheduling::Readiness::Ready
+                            crate::scheduling::Readiness::NotReady
                         };
 
                         match sched_ref.decide(&state) {
                             WorkerDecision::Step => {
+                                // Construct real ctx for the actual step.
                                 let mut ctx = crate::node::StepContext::new(
                                     [&mut in_e_1_0],
                                     [&mut out_e_1_0],
@@ -1150,7 +1189,8 @@ pub mod concurrent_graph {
                                         state.last_step = Some(sr);
                                         state.last_error = false;
                                     }
-                                    Err(_e) => {
+                                    Err(e) => {
+                                        ::std::eprintln!("run_scoped: node 1 step failed: {:?}", e);
                                         state.last_step = None;
                                         state.last_error = true;
                                     }
@@ -1166,7 +1206,7 @@ pub mod concurrent_graph {
                     }
                 });
 
-                // --- Node 2: sink (readiness from input edge 1, no outputs) ---
+                // --- Node 2: sink (batch-aware readiness from input edge 1) ---
                 {
                     fn _assert_send<_T: core::marker::Send>() {}
                     _assert_send::<SnkNode>();
@@ -1181,19 +1221,53 @@ pub mod concurrent_graph {
                     loop {
                         state.current_tick = clock_ref.now_ticks();
 
-                        let _any_input =
-                            *crate::edge::Edge::occupancy(&in_e_2_0, &pol_1).items() > 0;
-
+                        // No outputs -> backpressure is BelowSoft
                         let mut _max_wm = crate::policy::WatermarkState::BelowSoft;
-                        // no output edges — no watermark check
                         state.backpressure = _max_wm;
 
-                        state.readiness = if !_any_input {
-                            crate::scheduling::Readiness::NotReady
-                        } else if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
-                            crate::scheduling::Readiness::ReadyUnderPressure
+                        // Cheap pre-check: do any input edges have items?
+                        let mut any_input_has_items = false;
+                        {
+                            // No outputs -> backpressure is BelowSoft (already set).
+                            let _occ = crate::edge::Edge::occupancy(&in_e_2_0, &pol_1);
+                            if *_occ.items() > 0 {
+                                any_input_has_items = true;
+                            }
+                        }
+
+                        // Probe authoritative batch semantics only if we have items.
+                        let mut any_input_has_batch = false;
+                        if any_input_has_items {
+                            let mut probe_ctx = crate::node::StepContext::new(
+                                [&mut in_e_2_0],
+                                [] as [&mut NoQueue; 0],
+                                [&mut in_m_2_0],
+                                [] as [&mut StaticMemoryManager<(), 1>; 0],
+                                [pol_1],
+                                [],
+                                2u32,
+                                [2u32],
+                                [],
+                                clock_ref,
+                                &mut telem,
+                            );
+                            let node_policy = n2.policy();
+                            for port in 0..1 {
+                                if probe_ctx.input_edge_has_batch(port, &node_policy) {
+                                    any_input_has_batch = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        state.readiness = if any_input_has_batch {
+                            if _max_wm >= crate::policy::WatermarkState::BetweenSoftAndHard {
+                                crate::scheduling::Readiness::ReadyUnderPressure
+                            } else {
+                                crate::scheduling::Readiness::Ready
+                            }
                         } else {
-                            crate::scheduling::Readiness::Ready
+                            crate::scheduling::Readiness::NotReady
                         };
 
                         match sched_ref.decide(&state) {
@@ -1216,7 +1290,8 @@ pub mod concurrent_graph {
                                         state.last_step = Some(sr);
                                         state.last_error = false;
                                     }
-                                    Err(_e) => {
+                                    Err(e) => {
+                                        ::std::eprintln!("run_scoped: node 2 step failed: {:?}", e);
                                         state.last_step = None;
                                         state.last_error = true;
                                     }
