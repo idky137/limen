@@ -68,7 +68,16 @@ own feature flag. All other hot-path code is safe Rust.
 - Some ergonomic patterns (e.g., `format!`, `to_string()`) are unavailable
   in the default build.
 
+### Future Direction
+
+A planned zero-lock concurrent edge and memory manager will use raw pointers
+internally (`unsafe` confined to the implementation, safe external API) to
+enable `no_alloc` concurrent execution. This extends the `unsafe` confinement
+principle to a second sanctioned module while keeping the rest of the codebase
+safe. See [ADR-013](013_ZERO_LOCK_CONCURRENT_GRAPHS.md) for details.
+
 ## Related ADRs
 
 - [ADR-001](001_WORKSPACE_STRUCTURE_CRATE_RESPONSIBILITIES.md) — crate isolation
 - [ADR-002](002_TRAIT_FIRST_ZERO_DYN_CONTRACTS.md) — zero dynamic dispatch
+- [ADR-013](013_ZERO_LOCK_CONCURRENT_GRAPHS.md) — zero-lock concurrent graphs

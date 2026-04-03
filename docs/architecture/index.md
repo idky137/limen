@@ -136,6 +136,13 @@ about `std`. All crates share the same hierarchy:
 | `spsc_raw` | Unsafe lock-free ring buffer (requires `std`). |
 | `bench` | Exposes test nodes, queues, and runtime implementations for integration tests. |
 
+**Planned:** A future `no_alloc` lock-free concurrent edge and memory manager
+option is planned, using raw pointers internally to provide true zero-lock
+concurrency without `Arc` or `Mutex`. This will allow a single graph definition
+to run on both bare-metal single-threaded and multi-threaded runtimes without
+changing edge or memory manager types. See
+[ADR-013](../ADRs/013_ZERO_LOCK_CONCURRENT_GRAPHS.md) for details.
+
 ---
 
 ## Module Map

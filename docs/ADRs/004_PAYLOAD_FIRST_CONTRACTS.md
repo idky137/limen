@@ -30,14 +30,17 @@ are generic over `InP: Payload` and `OutP: Payload`. Any type implementing
 
 ### First-Class Tensor Support
 
-While any `Payload` is valid, Limen provides optimised tensor types as the
-primary currency for ML workloads:
+While any `Payload` is valid, Limen provides an optimised owned tensor type as
+the primary currency for ML workloads:
 
-- `TensorRef<'a, T, N, R>` — immutable typed tensor view
-- `MutTensorRef<'a, T, N, R>` — mutable tensor view
+- `Tensor<T, N, R>` — owned, inline, fixed-capacity tensor. `T` is the
+  element scalar type (`Copy + Default + DType`), `N` is the max element
+  capacity (compile-time const), `R` is the rank. Stored inline as
+  `[T; N]` with a shape array `[usize; R]`.
 
-These carry shape metadata and implement `Payload` with accurate byte
-reporting.
+`Tensor` is `Copy` and requires no heap, enabling zero-allocation message
+pipelines. It implements `Payload` with byte size computed from the live
+element count.
 
 ## Rationale
 

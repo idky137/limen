@@ -59,6 +59,7 @@ considered, and consequences.
 | [010](ADRs/010_RUNTIME_CONTRACT.md) | Runtime contract |
 | [011](ADRs/011_BATCH_SEMANTICS.md) | Batch semantics |
 | [012](ADRs/012_ROBOTICS_READINESS.md) | Robotics readiness primitives |
+| [013](ADRs/013_ZERO_LOCK_CONCURRENT_GRAPHS.md) | Zero-lock concurrent graphs |
 
 ---
 

@@ -81,16 +81,21 @@ Memory class is **not** part of `BufferDescriptor` — it is owned by the
 
 ---
 
-## Tensor Types
+## Tensor Type
 
 Limen's primary payload currency for ML workloads:
 
-- **`TensorRef<'a, T, N, R>`** — immutable typed tensor view. `T` is the
-  element type, `N` is the element count, `R` is the rank. Backed by a
-  fixed-size `[T; N]` buffer with a shape array `[usize; R]`.
-- **`MutTensorRef<'a, T, N, R>`** — mutable tensor view for in-place writes.
+- **`Tensor<T, N, R>`** — owned, inline, fixed-capacity tensor. `T` is the
+  element scalar type (`Copy + Default + DType`), `N` is the max element
+  capacity (compile-time const), `R` is the rank. Stored inline as
+  `[T; N]` with a shape array `[usize; R]`.
 
-Both implement `Payload` and carry shape metadata for inference backends.
+`Tensor` is `Copy` and requires no heap, enabling zero-allocation message
+pipelines. It implements `Payload` with byte size computed from the live
+element count (`len * size_of::<T>()`).
+
+Rank-specific constructors are provided: `nhwc(n, h, w, c, data)`,
+`nc(n, c, data)`, `from_slice(data)`, `from_shape(shape, data)`.
 
 ---
 

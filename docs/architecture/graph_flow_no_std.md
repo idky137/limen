@@ -9,43 +9,39 @@ no heap and no threads — the default `no_std` execution path.
 
 ```mermaid
 sequenceDiagram
-    participant RT as Runtime<br/>(TestNoStdRuntime)
-    participant OCC as Occupancy Buffer
+    participant RT as Runtime
     participant SCH as DequeuePolicy
     participant G as GraphApi
-    participant CTX as StepContext
     participant N as Node
-    participant IE as Input Edge<br/>(StaticRing)
-    participant MM_IN as Input MemoryManager<br/>(StaticMemoryManager)
-    participant MM_OUT as Output MemoryManager<br/>(StaticMemoryManager)
-    participant OE as Output Edge<br/>(StaticRing)
+    participant IE as Input Edge
+    participant MM_IN as Input Manager
+    participant MM_OUT as Output Manager
+    participant OE as Output Edge
 
     RT->>G: write_all_edge_occupancies(buf)
-    G-->>OCC: [EdgeOccupancy; EDGE_COUNT]
+    G-->>RT: occupancy snapshot
 
-    loop for each step
-        RT->>SCH: select_next(summaries, occupancies)
-        SCH-->>RT: Some(node_index)
-        RT->>G: step_node_by_index(i, clock, telemetry)
+    loop Step Loop
+        RT->>SCH: select_next(summaries)
+        SCH-->>RT: node_index
+        RT->>G: step_node_by_index(i)
         G->>G: build StepContext for node i
         G->>N: step(ctx)
 
-        N->>CTX: pop_and_process(port, |msg| ...)
-        CTX->>IE: try_pop(headers)
-        IE-->>CTX: MessageToken
-        CTX->>MM_IN: read(token)
-        MM_IN-->>CTX: ReadGuard<Message<P>>
-        CTX->>N: closure(&message)
-        N-->>CTX: ProcessResult::Output(result_msg)
-        CTX->>MM_OUT: store(result_msg)
-        MM_OUT-->>CTX: new_token
-        CTX->>OE: try_push(new_token, policy, headers)
-        OE-->>CTX: Enqueued
-        CTX->>MM_IN: free(old_token)
+        N->>IE: try_pop(headers)
+        IE-->>N: MessageToken
+        N->>MM_IN: read(token)
+        MM_IN-->>N: message reference
+        N->>N: process payload
+        N->>MM_OUT: store(result_msg)
+        MM_OUT-->>N: new token
+        N->>OE: try_push(token, policy, headers)
+        OE-->>N: Enqueued
+        N->>MM_IN: free(old_token)
 
-        N-->>G: StepResult::MadeProgress
+        N-->>G: StepResult
         G-->>RT: StepResult
-        RT->>G: refresh_occupancies_for_node<I>(buf)
+        RT->>G: refresh_occupancies_for_node(buf)
         RT->>RT: emit telemetry
     end
 ```
