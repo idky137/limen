@@ -137,7 +137,7 @@ All of the following must be satisfied:
   implementations.
 - Stability guarantees: semver compliance, deprecation policy.
 
-### Post v0.1.0 (Stretch Goals)
+### Post v1.0 (Stretch Goals)
 
 - **Zero-lock concurrent graphs ([ADR-013](ADRs/013_ZERO_LOCK_ZERO_COPY_CONCURRENT_GRAPHS.md))** —
   lock-free edge and memory manager enabling a single graph type across all
