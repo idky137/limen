@@ -206,3 +206,7 @@ CONDITIONS OF ANY KIND. See the licence for details.
 ---
 
 *Limen — the threshold between the graph you define and the hardware it runs on.*
+
+---
+
+Copyright © 2025–present Arlo Louis Byrne (idky137)
