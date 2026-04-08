@@ -4,7 +4,7 @@
 //! [`MessageToken`] handles rather than full messages; actual message data
 //! lives in a [`MemoryManager`](crate::memory::manager::MemoryManager).
 //! Header metadata needed for admission and batching is accessed through a
-//! [`HeaderStore`](crate::memory::header_store::HeaderStore) parameter —
+//! [`HeaderStore`] parameter —
 //! statically dispatched, no `dyn`.
 //!
 //! Key types:
@@ -272,10 +272,10 @@ pub trait ScopedEdge: Edge {
 /// - `P`: Payload type of the [`Message`] carried by this queue.
 ///
 /// # Behavior
-/// - [`SpscQueue::try_push`] always returns [`EnqueueResult::Rejected`].
-/// - [`SpscQueue::try_pop`] always returns [`QueueError::Empty`].
-/// - [`SpscQueue::try_peek`] always returns [`QueueError::Empty`].
-/// - [`SpscQueue::occupancy`] always reports zero items, zero bytes, and
+/// - [`Edge::try_push`] always returns [`EnqueueResult::Rejected`].
+/// - [`Edge::try_pop`] always returns [`QueueError::Empty`].
+/// - [`Edge::try_peek`] always returns [`QueueError::Empty`].
+/// - [`Edge::occupancy`] always reports zero items, zero bytes, and
 ///   [`WatermarkState::AtOrAboveHard`] (fully saturated, disallowing admission).
 pub struct NoQueue;
 

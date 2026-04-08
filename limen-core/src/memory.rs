@@ -207,7 +207,7 @@ impl PlacementAcceptance {
 
 /// A descriptor of a buffer/payload view for size accounting.
 ///
-/// Memory class information is now owned by the [`MemoryManager`] rather than
+/// Memory class information is now owned by the [`manager::MemoryManager`] rather than
 /// the payload itself — see `MemoryManager::memory_class()`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

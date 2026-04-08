@@ -14,6 +14,7 @@
 #         * std
 #         * spsc_raw
 #     - clippy for the same feature sets (unless `--no-clippy-or-fmt` is set)
+#     - cargo doc with -D warnings (unless `--no-clippy-or-fmt` is set)
 #
 # Options:
 #   --clean       Run `cargo clean` after all CI checks pass
@@ -126,8 +127,14 @@ if [ "$SKIP_CLIPPY_AND_FMT" = false ]; then
   printf "  -> cargo fmt --all -- --check\n"
   cargo fmt --all -- --check
   printf "\n"
+
+  printf "==> doc check\n"
+  printf "  -> RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps --all-features\n"
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+  printf "\n"
 else
-  printf "==> rustfmt skipped (--no-clippy-or-fmt)\n\n"
+  printf "==> rustfmt skipped (--no-clippy-or-fmt)\n"
+  printf "==> doc check skipped (--no-clippy-or-fmt)\n\n"
 fi
 
 printf "==> local CI passed\n\n"
