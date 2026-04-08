@@ -5,7 +5,7 @@
 //!
 //! Key traits:
 //! - [`GraphApi`] — top-level entry point; step + occupancy sampling.
-//! - [`ScopedGraphApi`] (`std`) — concurrent variant with scoped worker threads.
+//! - `ScopedGraphApi` (`std`) — concurrent variant with scoped worker threads.
 //! - [`GraphNodeAccess<I>`] / [`GraphEdgeAccess<E>`] — compile-time indexed access.
 //! - [`GraphNodeTypes<I, IN, OUT>`] — per-node payload and queue type associations.
 //! - [`GraphNodeContextBuilder<I, IN, OUT>`] — factory for [`StepContext`].

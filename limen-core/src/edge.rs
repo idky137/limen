@@ -12,10 +12,10 @@
 //! - [`EdgeOccupancy`] — occupancy snapshot used for scheduling and telemetry.
 //! - [`EnqueueResult`] — outcome of a push attempt.
 //! - [`NoQueue`] — a no-op placeholder for unconnected ports.
-//! - [`ScopedEdge`] (`std`) — factory for per-worker handles in concurrent execution.
+//! - `ScopedEdge` (`std`) — factory for per-worker handles in concurrent execution.
 //!
-//! Implementations: [`spsc_array`] (`no_std`), [`spsc_vecdeque`] (`alloc`),
-//! [`spsc_concurrent`] (`std`), [`spsc_priority2`], [`spsc_raw`] (`spsc_raw` feature).
+//! Implementations: [`spsc_array`] (`no_std`), `spsc_vecdeque` (`alloc`),
+//! `spsc_concurrent` (`std`), [`spsc_priority2`], `spsc_raw` (`spsc_raw` feature).
 
 use crate::errors::QueueError;
 use crate::message::Message;

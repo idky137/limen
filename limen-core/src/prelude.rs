@@ -6,10 +6,10 @@
 //! - (default / `no_std`) — [`Edge`], [`StaticRing`], [`StaticMemoryManager`],
 //!   [`Tensor`], [`Batch`], [`Node`], [`GraphApi`],
 //!   [`PlatformClock`], policy types, etc.
-//! - `alloc` — [`HeapMemoryManager`], [`HeapRing`].
-//! - `std` — [`ConcurrentMemoryManager`], [`ConcurrentEdge`], [`ScopedEdge`],
-//!   [`ScopedGraphApi`], concurrent telemetry.
-//! - `spsc_raw` — [`SpscAtomicRing`].
+//! - `alloc` — `HeapMemoryManager`, `HeapRing`.
+//! - `std` — `ConcurrentMemoryManager`, `ConcurrentEdge`, `ScopedEdge`,
+//!   `ScopedGraphApi`, concurrent telemetry.
+//! - `spsc_raw` — `SpscAtomicRing`.
 //! - `bench` / `test` — test nodes, test edges, test graph, test runtime.
 
 pub use crate::edge::{
