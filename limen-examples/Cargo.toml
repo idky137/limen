@@ -14,9 +14,17 @@ alloc = ["limen-core/alloc"]
 std = ["alloc", "limen-core/std"]
 spsc_raw = ["std", "limen-core/spsc_raw"]
 
+[dependencies]
+limen-core = { workspace = true, features = ["bench"] }
+limen-build = { workspace = true }
+
 [dev-dependencies]
 limen-core = { workspace = true, features = ["bench"] }
 limen-build = { workspace = true }
+
+[[example]]
+name = "pipeline_demo"
+required-features = ["std"]
 
 [build-dependencies]
 limen-core = { workspace = true, features = ["bench"] }
