@@ -60,23 +60,22 @@ Limen closes this gap.
 
 ## Quickstart
 
-**Prerequisites:** Rust stable toolchain. No external dependencies.
+**Prerequisites:** Rust stable toolchain (1.81+). No external dependencies.
 
 ```bash
 # Clone and enter the repository
 git clone https://github.com/idky137/limen.git
 cd limen
 
-# Run the no_std single-threaded pipeline
-cargo test -p limen-examples -- codegen_core_pipeline_runs_with_nostd_runtime --nocapture
-
-# Run the std multi-threaded pipeline (concurrent queues, scoped threads)
-cargo test -p limen-examples --features std -- codegen_std_pipeline_runs_with_std_runtime --nocapture
+# Run the pipeline demo (requires std feature for concurrent execution)
+cargo run -p limen-examples --features std --example pipeline_demo
 ```
 
-Both tests build a three-node **Source → Model → Sink** pipeline from a
-codegen-generated graph, wire it to a runtime, and step it through several
-iterations. `--nocapture` prints edge occupancies and telemetry to stdout.
+The demo builds a **Sensor → Model → Actuator** pipeline, runs it
+step-by-step showing backpressure and batching, then runs the same graph
+concurrently with one thread per node. See the
+[Quickstart Guide](docs/quickstart.md) for a full walkthrough of the output
+and what each section demonstrates.
 
 ---
 
@@ -208,9 +207,11 @@ beyond.
 | Document | Description |
 |---|---|
 | [API Reference](https://idky137.github.io/limen/) | Rustdoc API documentation (GitHub Pages) |
+| [Quickstart Guide](docs/quickstart.md) | Pipeline demo walkthrough and expected output |
 | [Architecture Guide](docs/architecture/index.md) | System design, memory model, execution flow |
 | [Decision Records](docs/ADRs/) | Rationale behind key design decisions |
 | [Roadmap](docs/roadmap.md) | Phased plan to v0.1.0 and stretch goals |
+| [Funding & Licensing](FUNDING.md) | Funded work commitments and how to support the project |
 | [Development Guide](docs/dev_guide.md) | Building, testing, and contributing |
 
 ---
@@ -221,12 +222,14 @@ Limen is released under the Apache License, Version 2.0
 ([LICENSE-APACHE](LICENSE-APACHE)).
 
 The project is developed and owned by its original author. Contributions
-are accepted under a Contributor Licence Agreement (CLA), which ensures
-the project can be maintained, evolved, and (if necessary) dual-licensed
-for commercial use.
+are accepted under a Contributor Licence Agreement ([CLA](CLA.md)), which
+ensures the project can be maintained, evolved, and (if necessary)
+dual-licensed for commercial use.
 
-The goal is to keep Limen broadly accessible while retaining the ability
-to support long-term sustainability and real-world deployment.
+All deliverables produced under accepted public grants will be released
+under Apache-2.0 and remain available under Apache-2.0. Future major
+versions may be distributed under different or additional licence terms.
+See [FUNDING.md](FUNDING.md) for details.
 
 ---
 
